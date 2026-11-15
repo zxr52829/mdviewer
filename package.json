@@ -1,6 +1,6 @@
 {
   "name": "mdviewer",
-  "version": "0.1.0",
+  "version": "1.0.0",
   "private": true,
   "description": "照 Trae CN 编辑架构实现的最小文本编辑器，支持 Markdown / JSON",
   "type": "module",
