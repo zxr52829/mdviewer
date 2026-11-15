@@ -1408,6 +1408,21 @@ body.resizing-v * {
 
 /* ---------------- AI 改写面板 ---------------- */
 
+/* 关键：作者样式表里的 display 会盖掉浏览器默认的 [hidden]{display:none}。
+   只要「有 display 的类 + hidden 属性」就会中招 —— 遮罩层会一直铺满全屏
+   并吃掉所有点击（表现为「面板关不掉、编辑器完全不能操作」），按钮也会一直挂着。
+
+   本项目此前是在 8 个地方各写一条 `.{class}[hidden]{display:none}` 打补丁
+   （.sidebar / .editor-selection / .resizer / .side-panel / .suggest-widget /
+   .settings-overlay / .prompt-overlay / .prompt-error）。那是同一个坑踩了 8 次。
+   新写的 .ai-overlay 漏了这条，就复现了当初的症状。
+
+   所以这里在根上加一条兜底，新组件不必再各自记得。上方那些逐类补丁保留 ——
+   它们已被这条覆盖，没有冲突，但删掉要动 8 处既有代码，收益不抵风险。 */
+[hidden] {
+  display: none !important;
+}
+
 .ai-overlay {
   position: fixed;
   inset: 0;

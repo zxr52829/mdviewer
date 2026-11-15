@@ -304,6 +304,7 @@ Trae 的颜色层次感来自 tmLanguage 定义的细粒度 scope，例如：
 | 状态栏计数一直是空的 | 构造函数里 `_listeners` 少了 `diagnostics` 键，`_emit` 静默丢弃 | 补上该键 |
 | 换文件后诊断不刷新 | `setValue` / 格式化走 `content` 事件，不走 `afterEdit` | `_onContentChanged` 也调度诊断 |
 | 配了环境变量 key 却显示未配置 | `loadAIConfig` 在「配置文件不存在」时提前 return，跳过了环境变量覆盖 | 先读文件，再无条件应用 env 覆盖 |
+| **一打开就被遮罩盖住、点哪都没反应、Esc 也关不掉** | `.ai-overlay` 是 `display:flex`，优先级高于浏览器默认的 `[hidden]{display:none}`，`hidden=true` 不生效，全屏遮罩一直吃事件 | 根上加 `[hidden]{display:none !important}` 兜底 |
 | 同一段文字被标两次 | 浏览器原生选区叠加自绘高亮 | `user-select:none` + `::selection` 透明，复制改为键位驱动 |
 | 上下移动后列号塌成 1 | 每次 `setCursor` 都把被行尾夹过的列写回「理想列」 | `keepDesired` 只让水平移动更新理想列 |
 | 选区矩形不再显示 | 清空选区时 `innerHTML=''` 移除了节点，池子仍持有孤儿引用 | 只设 `hidden`，不摘除节点 |
