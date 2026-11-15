@@ -245,11 +245,15 @@ func callDeepSeek(cfg aiConfig, req *aiRewriteRequest) (string, *usageInfo, erro
 		lang = "text"
 	}
 
+	// 提示词里不给「原样输出」的出口：留任何一条，模型都会把它当成捷径。
+	// 「这段代码已经足够好」「无需改动」这类回答一律视为改写失败，
+	// 宁可让用户看到明确报错，也不要让他对着一个空 diff 猜哪里出了问题。
 	systemPrompt := "你是代码编辑器里的改写引擎。" +
-		"只输出替换后的完整代码，不要解释，不要 markdown 代码围栏，不要任何前后缀说明。" +
+		"输出必须整体替换被改写的片段：不要解释，不要 markdown 代码围栏，不要前后缀说明。" +
 		"保持与原文相同的缩进风格与缩进宽度。" +
-		"必须真正执行改写要求；只有当指令在语法上完全无法套用于这段代码时，才原样输出。" +
-		"像「改成箭头函数」「加错误处理」「用 forEach 重写」这类要求都要实际改出来，不要以「已经足够好」为由跳过。" +
+		"必须真正执行改写要求。「改成箭头函数」「加错误处理」「用 forEach 重写」这类要求都要实际改出来，" +
+		"禁止以「已经足够好」「无需改动」为由跳过。" +
+		"只有当指令与这段代码完全无关（例如对 JSON 说「加 try/catch」），才允许原样返回。" +
 		"当前语言：" + lang + "。"
 
 	userPrompt := buildUserPrompt(req)
@@ -320,23 +324,51 @@ func callDeepSeek(cfg aiConfig, req *aiRewriteRequest) (string, *usageInfo, erro
 
 func buildUserPrompt(req *aiRewriteRequest) string {
 	var b strings.Builder
-	// 用明确分隔符包住上下文，避免模型把它当成要改写的内容
-	if req.ContextBefore != "" {
-		b.WriteString("/* 上文（仅供理解，不要出现在输出里） */\n")
-		b.WriteString(req.ContextBefore)
-		b.WriteString("\n/* 上文结束 */\n\n")
+	// 用明确分隔符包住上下文，避免模型把它当成要改写的内容。
+	// 分隔符按语言选：给 JavaScript 的上下文套 /**/ 会在原文里制造
+	// 未闭合块注释（原文自己也有块注释时更糟），模型读到的是坏代码。
+	open, close := fenceFor(req.Language)
+	// 无右界符的语言（# / --）不能留尾空格，否则标记行带一行尾随空白
+	sep := func(label string) string {
+		if close == "" {
+			return open + " " + label
+		}
+		return open + " " + label + " " + close
 	}
-	b.WriteString("/* 待改写（这段是要被整体替换的） */\n")
+	if req.ContextBefore != "" {
+		b.WriteString(sep("上文（仅供理解，不要出现在输出里）") + "\n")
+		b.WriteString(req.ContextBefore)
+		b.WriteString("\n" + sep("上文结束") + "\n\n")
+	}
+	b.WriteString(sep("待改写（这段是要被整体替换的）") + "\n")
 	b.WriteString(req.Selected)
-	b.WriteString("\n/* 待改写结束 */\n\n")
+	b.WriteString("\n" + sep("待改写结束") + "\n\n")
 	if req.ContextAfter != "" {
-		b.WriteString("/* 下文（仅供理解，不要出现在输出里） */\n")
+		b.WriteString(sep("下文（仅供理解，不要出现在输出里）") + "\n")
 		b.WriteString(req.ContextAfter)
-		b.WriteString("\n/* 下文结束 */\n\n")
+		b.WriteString("\n" + sep("下文结束") + "\n\n")
 	}
 	b.WriteString("改写要求：")
 	b.WriteString(req.Instruction)
 	return b.String()
+}
+
+// fenceFor 按语言选注释风格的分隔符。
+//
+// 这些分隔符只是给模型的视觉边界，但模型会原样复制其中的语法习惯，
+// 所以必须与目标语言一致 —— 否则等于在提示里示范了另一种语言的注释。
+func fenceFor(language string) (string, string) {
+	switch strings.ToLower(language) {
+	case "html", "xml":
+		return "<!--", "-->"
+	case "python", "ruby", "shell", "powershell", "yaml", "toml", "ini":
+		return "#", ""
+	case "sql":
+		return "--", ""
+	default:
+		// javascript / typescript / css / go / rust / java / c / cpp / …
+		return "/*", "*/"
+	}
 }
 
 // stripCodeFence 去掉模型偶尔仍然吐出的 ```lang ... ``` 包裹。

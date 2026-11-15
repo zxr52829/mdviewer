@@ -14,15 +14,18 @@
  */
 
 import { aiRewrite } from './api.js';
-import { diffLines, diffStats } from './line-diff.js';
+import { diffLines, diffStats, onlyTrailingBlankChange } from './line-diff.js';
 
-export { diffLines, diffStats };
+export { diffLines, diffStats, onlyTrailingBlankChange };
 
 export class AiRewritePanel {
   /**
    * @param {HTMLElement} root 挂载点（通常是 body）
    * @param {object} opts
    * @param {() => object} opts.getSettings 取当前设置
+   * @param {() => number} [opts.getVersion] 取当前 model.version，用于失效判定
+   * @param {(offset:number, deleteCount:number) => (string|undefined)} [opts.getSlice]
+   *   取当前文档在目标区间上的文本，用于二次失效判定
    * @param {(text:string, offset:number, deleteCount:number) => void} opts.applyEdit
    * @param {(msg:string, kind?:string) => void} opts.notify 状态栏提示
    */
@@ -153,7 +156,9 @@ export class AiRewritePanel {
 
     const lines = ctx.selected.split('\n').length;
     this.metaEl.textContent = `${lines} 行 · ${ctx.language || 'text'}`;
-    this.card.classList.remove('ai-wide');
+    // 长选区的 diff 用更宽的卡片：默认 720px 下 100+ 行的改写预览
+    // 横向和纵向都挤，看过一次就得滚动半天。
+    this.card.classList.toggle('ai-wide', lines > 40);
 
     // 焦点放到输入框。用 rAF 是因为 hidden 刚被移除，立即 focus 在部分浏览器无效
     requestAnimationFrame(() => this.input.focus());
@@ -243,11 +248,23 @@ export class AiRewritePanel {
       return;
     }
 
-    // 末尾换行差异不算有意义的变化，但要保留在应用结果里
     const aLines = before.split('\n');
     const bLines = after.split('\n');
     const rows = diffLines(aLines, bLines);
     const { added, removed } = diffStats(rows);
+
+    // 仅「末尾空行」的差异不构成有效变化：LCS 会给它记一条 add/del，
+    // 界面上就是一行空白的 + 或 −，用户看不出改了什么，也无从判断
+    // 该不该应用。这种情况按「无变化」处理，收起应用按钮。
+    if (onlyTrailingBlankChange(rows)) {
+      this._showError('差异只有末尾空行，没有可应用的内容变化。');
+      this.diffEl.hidden = true;
+      this.applyBtn.hidden = true;
+      this.discardBtn.hidden = false;
+      this.metaEl.textContent = `+${added} −${removed}（仅空行）`;
+      this.mode = 'preview';
+      return;
+    }
 
     this.diffEl.hidden = false;
     this.diffEl.textContent = '';
@@ -315,17 +332,34 @@ export class AiRewritePanel {
    * 应用改写。
    *
    * 版本校验是硬要求：从发起请求到用户点应用之间，文档可能被改过
-   * （自动保存、另一处编辑、撤销）。此时原 offset 已经指向错误位置，
+   * （另一处编辑、撤销）。此时原 offset 已经指向错误位置，
    * 直接覆盖会吃掉不相干的文本。宁可让用户重来。
+   *
+   * 校验分两层，缺一不可：
+   *   1. version 必须没动 —— 任何 edit 都会让 buffer.version 递增；
+   *   2. 目标区间必须仍是当初选中的那段原文 —— version 对不上时这层不生效，
+   *      但版本相同也可能因为「改了又撤销」而落到别的内容上。
+   *      只有两层都过，才执行替换。
+   *
+   * 刻意不看 isDirty / 是否自动保存过：保存写的是磁盘，不动模型，
+   * 把「保存过」当成失效条件会让自动保存开着时功能几乎不可用。
    */
   apply() {
     if (!this._ctx || this._result === null) return;
-    const stale = this.opts.getVersion?.();
-    if (stale !== undefined && stale !== this._ctx.version) {
+
+    const currentVersion = this.opts.getVersion?.();
+    const currentSlice = this.opts.getSlice?.(this._ctx.offset, this._ctx.deleteCount);
+
+    const versionOk = currentVersion === undefined || currentVersion === this._ctx.version;
+    const sliceOk = currentSlice === undefined || currentSlice === this._ctx.selected;
+
+    if (!versionOk || !sliceOk) {
       this._showError('文档在请求期间被修改过，原位置已失效。请重新选中后再试。');
       this.applyBtn.hidden = true;
+      this.mode = 'stale';
       return;
     }
+
     const { offset, deleteCount } = this._ctx;
     const text = this._result;
     this.close();

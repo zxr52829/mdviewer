@@ -42,10 +42,16 @@ function lexicalTraits(languageId) {
     case 'typescript':
       return { lineComment: '//', blockComment: ['/*', '*/'], quotes: ['"', "'"], template: '`' };
     case 'css':
+      // CSS 的 // 是无效注释，不能当行注释处理：`background: url(http://a/b)`
+      // 会被后面的括号配对逻辑截断，误报未闭合。CSS 只有块注释。
+      return { lineComment: null, blockComment: ['/*', '*/'], quotes: ['"', "'"], template: null };
     case 'scss':
     case 'less':
       return { lineComment: '//', blockComment: ['/*', '*/'], quotes: ['"', "'"], template: null };
     case 'go':
+      // Go 的反引号是原始字符串字面量，可跨行、内部无转义。
+      // 不追踪它的话，里面的括号会被当成代码参与配对。
+      return { lineComment: '//', blockComment: ['/*', '*/'], quotes: ['"', "'"], template: '`' };
     case 'rust':
     case 'java':
     case 'c':
@@ -60,10 +66,14 @@ function lexicalTraits(languageId) {
       return { lineComment: '#', blockComment: null, quotes: ['"', "'"], template: null };
     case 'shell':
     case 'powershell':
-    case 'yaml':
     case 'toml':
     case 'ini':
       return { lineComment: '#', blockComment: null, quotes: ['"', "'"], template: null };
+    case 'yaml':
+      // YAML 只在值以引号**开头**时才有引号语义（`k: "v"`）。
+      // 值中间的撇号是普通文本（`msg: don't`），按字符串扫描会满屏假报错，
+      // 所以由 yamlQuoteProbe 判定是否开启引号扫描。
+      return { lineComment: '#', blockComment: null, quotes: ['"', "'"], template: null, yamlQuoteProbe: true };
     case 'sql':
       return { lineComment: '--', blockComment: ['/*', '*/'], quotes: ["'", '"'], template: null };
     case 'html':
@@ -79,6 +89,27 @@ function lexicalTraits(languageId) {
 const NO_BRACKET_CHECK = new Set(['markdown', 'plaintext', 'html', 'xml', 'yaml', 'toml', 'ini', 'sql']);
 
 const OPEN = { '(': ')', '[': ']', '{': '}' };
+
+/** 这些字符后面的引号算「值的开头」（YAML 专用判定） */
+const YAML_VALUE_OPENERS = new Set([':', '-', '[', '{', ',', '?']);
+
+/**
+ * YAML 行内判定：当前位置的引号是否开启一个字符串值。
+ *
+ * 只在这几种位置算开启：行首、`key:` 之后、列表项 `- ` 之后、
+ * 花括号/方括号/逗号之后。`msg: don't stop` 里的撇号不在这些位置，
+ * 就被当作普通文本，不会误报未闭合。
+ *
+ * @param {string} line 当前行
+ * @param {number} quoteCol 引号所在列（0-based）
+ * @returns {boolean}
+ */
+function yamlQuoteOpens(line, quoteCol) {
+  let k = quoteCol - 1;
+  while (k >= 0 && (line[k] === ' ' || line[k] === '\t')) k--;
+  if (k < 0) return true; // 行首（或全空白）
+  return YAML_VALUE_OPENERS.has(line[k]);
+}
 
 /**
  * 跨行扫描器。
@@ -100,6 +131,9 @@ function scanLines(lines, traits, checkBrackets) {
   let inString = false;
   let quote = '';
   let stringStart = 0; // 字符串在本行的起始列（0-based），用于画出完整错误区间
+  // 模板字符串（JS 反引号 / Go 原始串）跨行合法：状态跨行保留，
+  // 本行结束时不报「未闭合」，期间也不参与括号配对。
+  let inTemplate = false;
 
   for (let li = 0; li < lines.length; li++) {
     const line = lines[li];
@@ -108,7 +142,6 @@ function scanLines(lines, traits, checkBrackets) {
 
     while (i < line.length) {
       const c = line[i];
-      const n = line[i + 1];
 
       // ---- 块注释中 ----
       if (inBlock) {
@@ -131,6 +164,14 @@ function scanLines(lines, traits, checkBrackets) {
         continue;
       }
 
+      // ---- 模板字符串中（跨行，不配括号，不判未闭合）----
+      if (inTemplate) {
+        if (c === '\\') { i += 2; continue; }
+        if (c === traits.template) { inTemplate = false; i++; continue; }
+        i++;
+        continue;
+      }
+
       // ---- 行注释 ----
       if (traits.lineComment && line.startsWith(traits.lineComment, i)) break;
 
@@ -142,9 +183,17 @@ function scanLines(lines, traits, checkBrackets) {
         continue;
       }
 
+      // ---- 模板字符串开启 ----
+      if (traits.template && c === traits.template) {
+        inTemplate = true;
+        i++;
+        continue;
+      }
+
       // ---- 字符串开启 ----
       if (c === '"' || c === "'") {
-        // 单引号在含撇号的自然语言里会误判，但代码文件里这是正确行为
+        // YAML 的撇号多半是文本里的 apostrophe，只有值的开头才算引号串
+        if (traits.yamlQuoteProbe && !yamlQuoteOpens(line, i)) { i++; continue; }
         inString = true;
         quote = c;
         stringStart = i;
@@ -192,30 +241,46 @@ function scanLines(lines, traits, checkBrackets) {
       quote = '';
     }
 
-    // 模板字符串跨行是合法的，不报错；此处 traits 未追踪 template，故无分支
+    // 模板字符串跨行合法，本行结束不判未闭合。
   }
 
-  // 文件结束时仍未闭合的块注释
+  // 文件结束时仍未闭合的块注释。
+  // 位置落在最后一行的行尾之后（length:0 的零宽区间），不盖住已有字符：
+  // 实机验证时旧实现从行尾前一列起画，最后两个字符被划进波浪线，
+  // 而那两个字符本身完全正常。
   if (inBlock) {
     const last = lines.length;
     out.push({
       severity: SEVERITY.error,
       line: last,
-      column: Math.max(1, (lines[last - 1] || '').length),
+      column: (lines[last - 1] || '').length + 1,
       length: 1,
       message: '未闭合的块注释',
       source: SOURCE.lexer,
     });
   }
 
-  // 文件结束时仍未闭合的括号
-  for (const item of stack) {
+  // 文件结束时仍未闭合的括号。
+  // 一次最多报 3 个：粘贴一段尾部截断的代码会攒出成百上千个未闭合括号，
+  // 全部吐出来会让状态栏计数爆炸、装订线满屏红点，信息量为零。
+  const MAX_UNCLOSED = 3;
+  for (const item of stack.slice(0, MAX_UNCLOSED)) {
     out.push({
       severity: SEVERITY.error,
       line: item.line,
       column: item.column,
       length: 1,
       message: `未闭合的括号 "${item.ch}"`,
+      source: SOURCE.bracket,
+    });
+  }
+  if (stack.length > MAX_UNCLOSED) {
+    out.push({
+      severity: SEVERITY.error,
+      line: lines.length,
+      column: 1,
+      length: 1,
+      message: `还有 ${stack.length - MAX_UNCLOSED} 个未闭合的括号未标出`,
       source: SOURCE.bracket,
     });
   }

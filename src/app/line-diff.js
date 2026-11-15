@@ -57,3 +57,25 @@ export function diffStats(rows) {
   }
   return { added, removed };
 }
+
+/**
+ * 判断差异是否只是末尾空行。
+ *
+ * LCS 在「原文无尾换行、新文有」这种情形下会记一条 add（text 为空串），
+ * 反之记一条 del。界面上那只是一行空白，用户既看不出改了什么，
+ * 也无从判断该不该接受，所以面板把这类改动视作「无有效变化」。
+ *
+ * 判定要严格：只要存在任何一条非空内容的 add/del，就不算。
+ *
+ * @param {Array} rows diffLines() 的结果
+ * @returns {boolean}
+ */
+export function onlyTrailingBlankChange(rows) {
+  let hasChange = false;
+  for (const r of rows) {
+    if (r.type === 'same') continue;
+    hasChange = true;
+    if (r.text.trim() !== '') return false;
+  }
+  return hasChange;
+}

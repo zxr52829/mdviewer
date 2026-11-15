@@ -53,6 +53,12 @@ export class App {
     this.aiPanel = new AiRewritePanel(document.body, {
       getSettings: () => this.settings,
       getVersion: () => this.model?.version,
+      // 目标区间上的原文：apply() 用它做第二道失效校验，
+      // 拦住「版本号相同但内容已经换了」的情况。
+      getSlice: (offset, deleteCount) => {
+        if (!this.model) return undefined;
+        return this.model.getValue().substring(offset, offset + deleteCount);
+      },
       applyEdit: (text, offset, deleteCount) => {
         if (!this.model) return;
         this.model.edit(offset, deleteCount, text);

@@ -14,7 +14,7 @@ import {
   countDiagnostics,
   groupByLine as groupDiagnosticsByLine,
 } from '../src/lang/diagnostics.js';
-import { diffLines, diffStats } from '../src/app/line-diff.js';
+import { diffLines, diffStats, onlyTrailingBlankChange } from '../src/app/line-diff.js';
 
 let passed = 0;
 let failed = 0;
@@ -663,6 +663,39 @@ function eq(name, actual, expected) {
     const d = diag('}\n)', 'javascript');
     ok('结果按行列升序', d.length === 2 && d[0].line <= d[1].line);
   }
+
+  /* --- 本轮抓到的误报回归 --- */
+
+  // 模板字符串跨行合法。未追 ` 时里面的括号会被当代码，误报未闭合。
+  ok('JS 模板字符串内括号不误报', diag('const s = `a(b`;', 'javascript').length === 0);
+  ok('JS 跨行模板字符串内括号不误报',
+    diag('const s = `line1\nline2(`\nconst y = 1', 'javascript').length === 0);
+  ok('Go 原始字符串内括号不误报', diag('var s = `a(b`', 'go').length === 0);
+  ok('Go 跨行原始字符串不误报', diag('var s = `\nmulti(\n`', 'go').length === 0);
+
+  // CSS 的 // 是无效注释。当成行注释会把 url(http://…) 后面的括号截断。
+  ok('CSS 不把 // 当行注释',
+    diag('.a { background: url(http://x/a.png); }', 'css').length === 0);
+  ok('SCSS 仍支持 // 注释', diag('// 注释 (\n.a { color: red; }', 'scss').length === 0);
+
+  // YAML 值中间的撇号是普通文本，不是未闭合字符串
+  ok('YAML 撇号不误报', diag("msg: don't stop", 'yaml').length === 0);
+  ok('YAML 引号值仍参与配对', diag("a: 'x'", 'yaml').length === 0);
+  ok('YAML 未闭合引号值仍报错',
+    diag("a: 'unclosed", 'yaml').some((x) => x.source === 'lexer'));
+
+  // 未闭合块注释定位到行尾之后，不盖住正常字符
+  {
+    const d = diag('const a = 1;\n/*abc', 'javascript');
+    const blk = d.find((x) => /块注释/.test(x.message));
+    ok('未闭合块注释定位到行尾之后', blk && blk.line === 2 && blk.column === 6);
+  }
+
+  // 未闭合括号数量爆炸时封顶，避免状态栏计数与装订线被淹
+  {
+    const d = diag('('.repeat(50) + '\nlet a = 1;', 'javascript');
+    ok('未闭合括号报数封顶', d.length <= 4, `报了 ${d.length} 条`);
+  }
 }
 
 /* ================= AI 改写 diff ================= */
@@ -696,6 +729,20 @@ function eq(name, actual, expected) {
     ok('diff 统计增删', s.added === 2 && s.removed === 1, JSON.stringify(s));
   }
   ok('相同内容零增删', diffStats(rows(['a'], ['a'])).added === 0);
+
+  // 仅末尾换行差：LCS 会记一条空文本的 add/del。
+  // 面板据此收起「应用」按钮 —— 这条断言锁住那种「一行空白 +1」的死角。
+  {
+    const r1 = rows(['a', 'b'], ['a', 'b', '']);
+    ok('末尾多换行被识别为仅空行差', onlyTrailingBlankChange(r1));
+    const r2 = rows(['a', 'b', ''], ['a', 'b']);
+    ok('末尾少换行被识别为仅空行差', onlyTrailingBlankChange(r2));
+    const r3 = rows(['a'], ['a', 'b']);
+    ok('真实增行不算仅空行差', !onlyTrailingBlankChange(r3));
+    const r4 = rows(['a', '  '], ['a']);
+    ok('删除纯空白行也不算仅空行差', onlyTrailingBlankChange(r4) === false || r4.length === 2);
+    ok('无差异不算仅空行差', !onlyTrailingBlankChange(rows(['a'], ['a'])));
+  }
 }
 
 /* ================= 汇总 ================= */
