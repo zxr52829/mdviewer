@@ -1,0 +1,1308 @@
+/* 颜色取自 VS Code Dark+ / Trae 默认暗色主题，保证观感一致 */
+:root {
+  --bg: #1e1e1e;
+  --bg-elevated: #252526;
+  --bg-titlebar: #323233;
+  --bg-status: #007acc;
+  --border: #2b2b2b;
+  --fg: #cccccc;
+  --fg-dim: #858585;
+  --fg-gutter: #6e7681;
+  --accent: #0a84ff;
+  --caret: #aeafad;
+  --selection: #264f78;
+  --scroll: #4e4e4e;
+
+  --tk-keyword: #569cd6;
+  --tk-string: #ce9178;
+  --tk-number: #b5cea8;
+  --tk-comment: #6a9955;
+  --tk-key: #9cdcfe;
+  --tk-property: #9cdcfe;
+  --tk-tag: #569cd6;
+  --tk-attr: #9cdcfe;
+  --tk-heading: #569cd6;
+  --tk-bold: #d7ba7d;
+  --tk-italic: #ce9178;
+  --tk-code: #ce9178;
+  --tk-link: #4ec9b0;
+  --tk-punct: #d4d4d4;
+  --tk-bool: #569cd6;
+
+  /* 由设置面板写入 */
+  --editor-font-size: 13px;
+  --editor-font-family: "JetBrains Mono", "Cascadia Mono", Consolas, "Microsoft YaHei", monospace;
+  --line-height: 20px;
+  --char-width: 8.4px;
+  --pad-top: 8px;
+  --pad-left: 12px;
+}
+
+/* 浅色主题：只覆盖颜色，不动度量 */
+:root[data-theme="light"] {
+  --bg: #ffffff;
+  --bg-elevated: #f3f3f3;
+  --bg-titlebar: #dddddd;
+  --bg-status: #007acc;
+  --border: #e0e0e0;
+  --fg: #333333;
+  --fg-dim: #6e6e6e;
+  --fg-gutter: #999999;
+  --caret: #333333;
+  --selection: #add6ff;
+  --scroll: #c1c1c1;
+
+  --tk-keyword: #0000ff;
+  --tk-string: #a31515;
+  --tk-number: #098658;
+  --tk-comment: #008000;
+  --tk-key: #001080;
+  --tk-property: #001080;
+  --tk-tag: #800000;
+  --tk-attr: #e50000;
+  --tk-heading: #0000ff;
+  --tk-bold: #795e26;
+  --tk-italic: #a31515;
+  --tk-code: #a31515;
+  --tk-link: #267f99;
+  --tk-punct: #333333;
+  --tk-bool: #0000ff;
+}
+
+:root[data-theme="light"] .editor-scroll,
+:root[data-theme="light"] .preview-body {
+  color: #333333;
+}
+
+:root[data-theme="light"] .view-line,
+:root[data-theme="light"] .preview-body {
+  color: #333333;
+}
+
+:root[data-theme="light"] .sidebar,
+:root[data-theme="light"] .preview-body .code-block {
+  background: #f7f7f7;
+}
+
+:root[data-theme="light"] .tree-item {
+  color: #333333;
+}
+
+:root[data-theme="light"] .tree-item:hover {
+  background: #e8e8e8;
+}
+
+:root[data-theme="light"] .tree-item.active {
+  background: #cde6ff;
+  color: #000000;
+}
+
+/* 关闭光标闪烁 */
+:root[data-cursor-blink="0"] .editor-caret {
+  animation: none !important;
+  background: var(--caret) !important;
+}
+
+/* 当前行高亮 */
+:root[data-line-highlight="0"] .editor-current-line {
+  display: none;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  margin: 0;
+  height: 100%;
+  overflow: hidden;
+}
+
+body {
+  display: flex;
+  flex-direction: column;
+  background: var(--bg);
+  color: var(--fg);
+  font-family: "Segoe WPC", "Segoe UI", "Microsoft YaHei", system-ui, sans-serif;
+  font-size: 13px;
+}
+
+/* ---------------- 标题栏 ---------------- */
+
+.titlebar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  height: 36px;
+  padding: 0 8px 0 12px;
+  background: var(--bg-titlebar);
+  border-bottom: 1px solid var(--border);
+  flex: 0 0 auto;
+  user-select: none;
+}
+
+.titlebar-left {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.brand {
+  font-weight: 600;
+  letter-spacing: 0.4px;
+  color: #e6e6e6;
+}
+
+.sep {
+  color: var(--fg-dim);
+}
+
+.file-name {
+  color: var(--fg);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.dirty {
+  color: #e2c08d;
+  font-size: 10px;
+}
+
+.titlebar-actions {
+  display: flex;
+  gap: 2px;
+  align-items: center;
+}
+
+/* 按钮做成扁平图标式：无边框、统一 26x26、hover 才显形。
+   旧的「灰底 + 灰边框 + 不等宽文字」在深色标题栏上显得笨重。 */
+.btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  min-width: 26px;
+  height: 26px;
+  padding: 0 7px;
+  border: none;
+  border-radius: 4px;
+  background: transparent;
+  color: #b8b8b8;
+  font-size: 12px;
+  font-family: inherit;
+  line-height: 1;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: background-color 0.12s ease, color 0.12s ease;
+}
+
+.btn:hover {
+  background: rgba(255, 255, 255, 0.09);
+  color: #f0f0f0;
+}
+
+.btn:active {
+  background: rgba(255, 255, 255, 0.14);
+}
+
+.btn:focus-visible {
+  outline: 1px solid var(--accent);
+  outline-offset: -1px;
+}
+
+/* 纯图标按钮：只有 svg，无文字 */
+.btn.icon-only {
+  padding: 0;
+  width: 26px;
+}
+
+.btn svg {
+  width: 15px;
+  height: 15px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.7;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  flex: 0 0 auto;
+}
+
+/* 实心主色按钮（保存）：用低饱和填充，不做刺眼的纯蓝块 */
+.btn.primary {
+  background: #0e639c;
+  color: #ffffff;
+  padding: 0 10px;
+}
+
+.btn.primary:hover {
+  background: #1177bb;
+  color: #ffffff;
+}
+
+.btn.primary:active {
+  background: #0a5485;
+}
+
+/* 按钮组之间的细分隔 */
+.titlebar-divider {
+  width: 1px;
+  height: 16px;
+  background: rgba(255, 255, 255, 0.1);
+  margin: 0 4px;
+  flex: 0 0 auto;
+}
+
+:root[data-theme="light"] .btn {
+  color: #444444;
+}
+
+:root[data-theme="light"] .btn:hover {
+  background: rgba(0, 0, 0, 0.07);
+  color: #000000;
+}
+
+:root[data-theme="light"] .btn.primary {
+  color: #ffffff;
+}
+
+:root[data-theme="light"] .titlebar-divider {
+  background: rgba(0, 0, 0, 0.12);
+}
+
+/* ---------------- 工作区 ---------------- */
+
+.workspace {
+  flex: 1 1 auto;
+  display: flex;
+  min-height: 0;
+  overflow: hidden;
+}
+
+/* 编辑器占据剩余空间，预览用固定初始宽度。
+   两者都设 flex-grow 会按各自的 flex-basis 比例分配，
+   导致 1 1 auto 的编辑区被 1 1 50% 的预览挤到只剩几十像素。 */
+.editor-pane {
+  flex: 1 1 0%;
+  min-width: 180px;
+  display: flex;
+}
+
+/* ---------------- 左侧文件树 ---------------- */
+
+.sidebar {
+  flex: 0 0 210px;
+  min-width: 120px;
+  display: flex;
+  flex-direction: column;
+  background: #181818;
+  border-right: none;
+  min-height: 0;
+}
+
+.sidebar[hidden] {
+  display: none;
+}
+
+.sidebar-header {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  height: 30px;
+  padding: 0 10px;
+  font-size: 11px;
+  letter-spacing: 0.6px;
+  text-transform: uppercase;
+  color: var(--fg-dim);
+  border-bottom: 1px solid var(--border);
+  flex: 0 0 auto;
+}
+
+.sidebar-root {
+  flex: 1 1 auto;
+  text-align: right;
+  font-size: 10px;
+  letter-spacing: 0;
+  text-transform: none;
+  color: #5a5a5a;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  direction: rtl; /* 路径太长时保留尾部（更有信息量） */
+}
+
+.file-tree {
+  flex: 1 1 auto;
+  overflow: auto;
+  padding: 4px 0 20px;
+  font-size: 12.5px;
+  min-height: 0;
+}
+
+.file-tree::-webkit-scrollbar {
+  width: 10px;
+}
+
+.file-tree::-webkit-scrollbar-thumb {
+  background: var(--scroll);
+  border-radius: 5px;
+  border: 3px solid transparent;
+  background-clip: padding-box;
+}
+
+.tree-item {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  height: 22px;
+  padding-right: 8px;
+  cursor: pointer;
+  white-space: nowrap;
+  overflow: hidden;
+  color: #c8c8c8;
+  user-select: none;
+}
+
+.tree-item:hover {
+  background: #2a2d2e;
+}
+
+.tree-item.active {
+  background: #094771;
+  color: #ffffff;
+}
+
+.tree-icon {
+  flex: 0 0 auto;
+  width: 12px;
+  text-align: center;
+  font-size: 10px;
+  color: #7a7a7a;
+}
+
+.tree-item.active .tree-icon {
+  color: #ffffff;
+}
+
+.tree-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.tree-empty {
+  padding: 12px 10px;
+  color: #5a5a5a;
+  font-size: 11.5px;
+  line-height: 1.6;
+}
+
+.editor-pane {
+  flex: 1 1 auto;
+  min-width: 180px;
+}
+
+.editor-host {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+}
+
+/* ---------------- 编辑器 ---------------- */
+
+.editor-root {
+  flex: 1 1 auto;
+  min-width: 0;
+  position: relative;
+  overflow: hidden;
+}
+
+/* 隐藏输入代理。
+   它是唯一接收键盘的节点，但必须完全不可见、不占位、不影响布局。
+   用 fixed + 1px + opacity 0 而不是 display:none —— display:none 的
+   元素无法获得焦点，也就收不到任何输入。
+   光标位置由自绘 caret 负责，所以原生 caret 也要靠 color:transparent 隐藏。 */
+.editor-input {
+  position: fixed;
+  left: 0;
+  top: 0;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  border: 0;
+  margin: 0;
+  opacity: 0;
+  resize: none;
+  overflow: hidden;
+  z-index: -1;
+  color: transparent;
+  background: transparent;
+  caret-color: transparent;
+  outline: none;
+  font-size: 1px;
+  line-height: 1;
+  /* 允许浏览器对它做拼写/自动纠正以外的任何处理都不要 */
+  -webkit-text-fill-color: transparent;
+}
+
+/* IME 候选框定位用：让浏览器把候选框放在光标附近而不是页面左上角。
+   做法是让 textarea 跟随光标：由 JS 设置 left/top。 */
+
+.editor-scroll {
+  position: absolute;
+  inset: 0;
+  overflow: auto;
+  outline: none;
+  cursor: text;
+  /* 选区完全由 .editor-sel-rect 自绘。必须禁掉浏览器原生选区，
+     否则拖拽时原生蓝底与自绘矩形叠加，同一段文字被标两次。
+     注意：这只影响选区绘制，不影响输入 —— 输入走 textarea。 */
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+/* 双保险：某些路径（双击选词、Shift+点选）仍可能生成原生选区 */
+.editor-scroll ::selection,
+.editor-scroll::selection {
+  background: transparent;
+  color: inherit;
+}
+
+.editor-scroll ::-moz-selection,
+.editor-scroll::-moz-selection {
+  background: transparent;
+  color: inherit;
+}
+
+.editor-scroll::-webkit-scrollbar,
+.panel-body::-webkit-scrollbar {
+  width: 12px;
+  height: 12px;
+}
+
+.editor-scroll::-webkit-scrollbar-thumb,
+.panel-body::-webkit-scrollbar-thumb {
+  background: var(--scroll);
+  border-radius: 6px;
+  border: 3px solid transparent;
+  background-clip: padding-box;
+}
+
+.editor-scroll::-webkit-scrollbar-track,
+.panel-body::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+/* gutter 与内容用绝对定位叠在滚动容器里，靠 scrollTop 自然同步 */
+.editor-gutter {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 56px;
+  pointer-events: none;
+  z-index: 1;
+}
+
+.view-gutter-line {
+  position: absolute;
+  right: 12px;
+  height: var(--line-height);
+  line-height: var(--line-height);
+  font-family: "JetBrains Mono", "Cascadia Mono", Consolas, "Microsoft YaHei", monospace;
+  font-size: 12px;
+  color: var(--fg-gutter);
+  text-align: right;
+  user-select: none;
+}
+
+.editor-content {
+  position: absolute;
+  top: 0;
+  left: 56px;
+  /* 宽度由 JS 按最长行设置（_syncWidth），不能用 right:0 锁死，
+     否则超长行会被裁剪且无法横向滚动 */
+  width: 100%;
+  min-height: 100%;
+}
+
+.editor-rows {
+  position: relative;
+  width: 100%;
+}
+
+.view-line {
+  position: absolute;
+  left: 0;
+  /* 不设 right，让行按内容宽度自然展开，配合 content 的显式宽度 */
+  min-width: 100%;
+  height: var(--line-height);
+  line-height: var(--line-height);
+  padding-left: var(--pad-left);
+  white-space: pre;
+  font-family: var(--editor-font-family);
+  font-size: var(--editor-font-size);
+  tab-size: 2;
+}
+
+.editor-caret {
+  position: absolute;
+  width: 2px;
+  background: var(--caret);
+  animation: caret-blink 1.1s steps(2, start) infinite;
+  pointer-events: none;
+  z-index: 3;
+}
+
+/* 光标显隐由 JS 的 input 焦点状态控制（editor-root.focused），
+   不能用 .editor-scroll:focus-within —— 真正的焦点在隐藏 textarea 上，
+   它不在 scroll 容器内，那条选择器会让光标永远透明、看起来"消失了"。 */
+.editor-root:not(.focused) .editor-caret {
+  animation: none;
+  background: transparent;
+}
+
+@keyframes caret-blink {
+  0%,
+  50% {
+    opacity: 1;
+  }
+  50.01%,
+  100% {
+    opacity: 0;
+  }
+}
+
+/* 选区容器本身不画色，颜色由每条矩形独立绘制 */
+.editor-selection {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  z-index: 2;
+  opacity: 0.75;
+}
+
+.editor-selection[hidden] {
+  display: none;
+}
+
+.editor-sel-rect {
+  position: absolute;
+  background: var(--selection);
+}
+
+/* 查找命中：文档中所有与选区相同的文字都标黄，对应 VS Code 的
+   editor.findMatchHighlightBackground。只改视觉，不改字符宽度与行高，
+   否则会把光标和选区定位带偏。 */
+.hl-match {
+  background: rgba(234, 179, 8, 0.32);
+  border-radius: 2px;
+  box-shadow: inset 0 0 0 1px rgba(234, 179, 8, 0.55);
+}
+
+/* 括号深度着色。取值来自 editorBracketHighlight.foreground1..3 的 dark 主题：
+   1 = #FFD700 金，2 = #DA70D6 紫，3 = #179FFF 蓝，第 4 层起不着色。 */
+.br-0 { color: #ffd700; }
+.br-1 { color: #da70d6; }
+.br-2 { color: #179fff; }
+
+/* 配对括号高亮：用描边而非底色，避免与查找命中的黄底叠加成第三种颜色 */
+.br-match {
+  outline: 1px solid rgba(255, 255, 255, 0.65);
+  outline-offset: -1px;
+  border-radius: 2px;
+}
+
+/* token 颜色 */
+.tk-keyword { color: var(--tk-keyword); }
+.tk-string { color: var(--tk-string); }
+.tk-number { color: var(--tk-number); }
+.tk-comment { color: var(--tk-comment); font-style: italic; }
+.tk-key { color: var(--tk-key); }
+.tk-property { color: var(--tk-property); }
+.tk-tag { color: var(--tk-tag); }
+.tk-attr { color: var(--tk-attr); }
+.tk-heading { color: var(--tk-heading); font-weight: 700; }
+.tk-bold { color: var(--tk-bold); font-weight: 700; }
+.tk-italic { color: var(--tk-italic); font-style: italic; }
+.tk-code { color: var(--tk-code); background: #2a2a2a; border-radius: 2px; }
+.tk-link { color: var(--tk-link); text-decoration: underline; }
+.tk-punct { color: var(--tk-punct); }
+.tk-bool { color: var(--tk-bool); }
+
+/* 标记符与内容分层：这层对比正是原版层次感的来源。
+   标记符统一压暗，内容保持高饱和。 */
+.tk-markup-sign { color: #6e7681; }
+.tk-link-text { color: #4ec9b0; }
+.tk-link-url { color: #ce9178; text-decoration: underline; }
+.tk-code-lang { color: #858585; font-style: italic; }
+.tk-escape { color: #d7ba7d; }
+.tk-operator { color: #8f8f8f; }
+
+/* ---------------- 侧面板 ---------------- */
+
+/* ---------------- 可拖动分隔条 ---------------- */
+
+.resizer {
+  flex: 0 0 4px;
+  background: transparent;
+  position: relative;
+  z-index: 5;
+  transition: background-color 0.12s ease;
+}
+
+.resizer-v {
+  cursor: col-resize;
+}
+
+.resizer-v::after {
+  /* 视觉上只有 1px 细线，但命中区是 4px，方便抓取 */
+  content: '';
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 1px;
+  width: 1px;
+  background: var(--border);
+  transition: background-color 0.12s ease;
+}
+
+.resizer-v:hover::after,
+.resizer-v.dragging::after {
+  background: var(--accent);
+  left: 0;
+  width: 4px;
+}
+
+.resizer[hidden] {
+  display: none;
+}
+
+/* 拖动时全局禁用选择与光标变化，避免拖到文字上出现选区的闪烁 */
+body.resizing-h,
+body.resizing-h * {
+  cursor: col-resize !important;
+  user-select: none !important;
+}
+
+body.resizing-v,
+body.resizing-v * {
+  cursor: row-resize !important;
+  user-select: none !important;
+}
+
+/* 预览面板：固定初始宽度，不参与剩余空间竞争。
+   它和编辑器同时 flex-grow 会让编辑器被挤扁。 */
+.side-panel {
+  flex: 0 0 420px;
+  min-width: 180px;
+  display: flex;
+  flex-direction: column;
+  background: var(--bg-elevated);
+}
+
+.side-panel[hidden] {
+  display: none;
+}
+
+.panel-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  height: 30px;
+  padding: 0 12px;
+  font-size: 11px;
+  letter-spacing: 0.6px;
+  text-transform: uppercase;
+  color: var(--fg-dim);
+  border-bottom: 1px solid var(--border);
+  flex: 0 0 auto;
+}
+
+.sync-toggle {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  text-transform: none;
+  letter-spacing: 0;
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.sync-toggle input {
+  accent-color: var(--accent);
+  cursor: pointer;
+}
+
+.panel-body {
+  flex: 1 1 auto;
+  overflow: auto;
+  min-height: 0;
+}
+
+/* ---------------- 预览正文 ---------------- */
+
+.preview-body {
+  padding: 16px 24px 48px;
+  font-size: 14px;
+  line-height: 1.65;
+  color: #d4d4d4;
+}
+
+.preview-body h1,
+.preview-body h2,
+.preview-body h3,
+.preview-body h4 {
+  margin: 1.2em 0 0.5em;
+  font-weight: 600;
+  border-bottom: 1px solid var(--border);
+  padding-bottom: 0.25em;
+}
+
+.preview-body h1 { font-size: 1.7em; }
+.preview-body h2 { font-size: 1.4em; }
+.preview-body h3 { font-size: 1.15em; border-bottom: none; }
+
+.preview-body p {
+  margin: 0.6em 0;
+}
+
+.preview-body ul,
+.preview-body ol {
+  margin: 0.6em 0;
+  padding-left: 1.6em;
+}
+
+.preview-body li {
+  margin: 0.2em 0;
+}
+
+.preview-body blockquote {
+  margin: 0.8em 0;
+  padding: 0.2em 1em;
+  border-left: 3px solid #0e639c;
+  background: #1a1a1a;
+  color: #a8a8a8;
+}
+
+.preview-body code {
+  font-family: "JetBrains Mono", Consolas, monospace;
+  font-size: 0.9em;
+  background: #2a2a2a;
+  padding: 1px 5px;
+  border-radius: 3px;
+  color: #ce9178;
+}
+
+.preview-body .code-block {
+  position: relative;
+  margin: 0.9em 0;
+  padding: 12px 14px;
+  background: #161616;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  overflow-x: auto;
+}
+
+.preview-body .code-block code {
+  background: none;
+  padding: 0;
+  color: #d4d4d4;
+  font-size: 12.5px;
+  line-height: 1.55;
+}
+
+.preview-body .code-lang {
+  position: absolute;
+  top: 4px;
+  right: 10px;
+  font-size: 10px;
+  color: #5a5a5a;
+  text-transform: uppercase;
+}
+
+.preview-body a {
+  color: #4ec9b0;
+}
+
+.preview-body table {
+  border-collapse: collapse;
+  margin: 0.9em 0;
+  font-size: 13px;
+}
+
+.preview-body th,
+.preview-body td {
+  border: 1px solid #3c3c3c;
+  padding: 6px 12px;
+  text-align: left;
+}
+
+.preview-body th {
+  background: #2a2a2a;
+  font-weight: 600;
+}
+
+.preview-body hr {
+  border: none;
+  border-top: 1px solid #3c3c3c;
+  margin: 1.4em 0;
+}
+
+/* 与编辑器光标行同步的高亮块 */
+.code-line {
+  border-radius: 2px;
+  transition: background-color 0.15s ease;
+}
+
+.code-active-line {
+  background: rgba(38, 79, 120, 0.16);
+}
+
+/* ---------------- JSON 大纲 / 诊断 ---------------- */
+
+.outline-root {
+  padding: 12px 16px 40px;
+  font-family: "JetBrains Mono", Consolas, monospace;
+  font-size: 12.5px;
+  line-height: 1.7;
+}
+
+.outline-head {
+  color: #4ec9b0;
+  margin-bottom: 10px;
+  padding-bottom: 8px;
+  border-bottom: 1px solid var(--border);
+}
+
+.outline-node {
+  display: flex;
+  gap: 8px;
+}
+
+.outline-children {
+  padding-left: 16px;
+  border-left: 1px solid #303030;
+}
+
+.outline-kind {
+  flex: 0 0 auto;
+  font-size: 10px;
+  padding: 0 5px;
+  border-radius: 2px;
+  background: #2d2d2d;
+  color: #858585;
+  align-self: center;
+}
+
+.k-object { color: #9cdcfe; }
+.k-array { color: #b5cea8; }
+.k-string { color: #ce9178; }
+.k-number { color: #b5cea8; }
+.k-boolean { color: #569cd6; }
+.k-null { color: #858585; }
+
+.outline-label {
+  color: #d4d4d4;
+  white-space: pre-wrap;
+  word-break: break-all;
+}
+
+.diag-item {
+  margin: 16px;
+  padding: 12px 14px;
+  border-left: 3px solid #f14c4c;
+  background: #2a1a1a;
+  border-radius: 3px;
+}
+
+.diag-title {
+  color: #f14c4c;
+  font-weight: 600;
+  margin-bottom: 6px;
+}
+
+.diag-loc {
+  color: #e2c08d;
+  font-size: 12px;
+  margin-bottom: 4px;
+}
+
+.diag-msg {
+  color: #d4d4d4;
+  font-family: monospace;
+  font-size: 12px;
+  white-space: pre-wrap;
+}
+
+/* ---------------- 补全下拉 ---------------- */
+
+.suggest-layer {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  z-index: 50;
+}
+
+.suggest-widget {
+  position: absolute;
+  min-width: 200px;
+  max-width: 460px;
+  overflow-y: auto;
+  background: #252526;
+  border: 1px solid #454545;
+  border-radius: 4px;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.45);
+  padding: 4px 0;
+  pointer-events: auto;
+  font-size: 12.5px;
+}
+
+.suggest-widget[hidden] {
+  display: none;
+}
+
+.suggest-widget::-webkit-scrollbar {
+  width: 10px;
+}
+
+.suggest-widget::-webkit-scrollbar-thumb {
+  background: #4e4e4e;
+  border-radius: 5px;
+  border: 3px solid transparent;
+  background-clip: padding-box;
+}
+
+.suggest-item {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  height: 22px;
+  padding: 0 8px;
+  cursor: pointer;
+  white-space: nowrap;
+  overflow: hidden;
+}
+
+.suggest-item.active {
+  background: #094771;
+}
+
+.suggest-kind {
+  flex: 0 0 auto;
+  width: 14px;
+  height: 14px;
+  line-height: 14px;
+  text-align: center;
+  border-radius: 2px;
+  font-size: 9px;
+  font-weight: 700;
+  color: #1e1e1e;
+  background: #7a7a7a;
+}
+
+.suggest-kind.k-keyword { background: #569cd6; }
+.suggest-kind.k-function { background: #b5cea8; }
+.suggest-kind.k-module { background: #c586c0; }
+.suggest-kind.k-exception { background: #f48771; }
+.suggest-kind.k-library { background: #dcdcaa; }
+.suggest-kind.k-text { background: #9cdcfe; }
+.suggest-kind.k-snippet { background: #ce9178; }
+
+.suggest-label {
+  flex: 0 1 auto;
+  color: #d4d4d4;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.suggest-match {
+  color: #4ec9b0;
+  font-weight: 600;
+}
+
+.suggest-detail {
+  flex: 0 1 auto;
+  margin-left: auto;
+  padding-left: 12px;
+  color: #7a7a7a;
+  font-size: 11px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.suggest-item.active .suggest-label { color: #ffffff; }
+.suggest-item.active .suggest-detail { color: #c0c0c0; }
+
+:root[data-theme="light"] .suggest-widget {
+  background: #ffffff;
+  border-color: #c8c8c8;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.18);
+}
+
+:root[data-theme="light"] .suggest-item.active {
+  background: #cde6ff;
+}
+
+:root[data-theme="light"] .suggest-label { color: #333333; }
+:root[data-theme="light"] .suggest-item.active .suggest-label { color: #000000; }
+
+.settings-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.45);
+  display: flex;
+  justify-content: flex-end;
+  z-index: 100;
+}
+
+.settings-overlay[hidden] {
+  display: none;
+}
+
+/* 输入弹层：居中卡片，替代原生 prompt */
+.prompt-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.45);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 200;
+}
+
+.prompt-overlay[hidden] {
+  display: none;
+}
+
+.prompt-box {
+  width: 420px;
+  max-width: 92vw;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.45);
+}
+
+.prompt-title {
+  font-size: 13px;
+  color: var(--fg);
+}
+
+.prompt-input {
+  width: 100%;
+  box-sizing: border-box;
+  padding: 7px 9px;
+  font-family: var(--editor-font-family);
+  font-size: 13px;
+  color: var(--fg);
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  outline: none;
+}
+
+.prompt-input:focus {
+  border-color: var(--accent, #4a9eff);
+}
+
+.prompt-error {
+  font-size: 12px;
+  color: #f14c4c;
+}
+
+.prompt-error[hidden] {
+  display: none;
+}
+
+.prompt-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.btn-primary {
+  background: var(--accent, #4a9eff);
+  color: #ffffff;
+}
+
+.btn-primary:hover {
+  filter: brightness(1.1);
+}
+
+.settings-drawer {
+  width: 420px;
+  max-width: 92vw;
+  height: 100%;
+  background: var(--bg-elevated);
+  border-left: 1px solid var(--border);
+  display: flex;
+  flex-direction: column;
+  box-shadow: -8px 0 24px rgba(0, 0, 0, 0.35);
+}
+
+.settings-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 12px 16px;
+  border-bottom: 1px solid var(--border);
+  flex: 0 0 auto;
+}
+
+.settings-head h2 {
+  margin: 0;
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--fg);
+  letter-spacing: 0.5px;
+}
+
+.settings-head-actions {
+  display: flex;
+  gap: 6px;
+}
+
+.settings-body {
+  flex: 1 1 auto;
+  overflow: auto;
+  padding: 8px 16px 40px;
+  min-height: 0;
+}
+
+.settings-body::-webkit-scrollbar {
+  width: 10px;
+}
+
+.settings-body::-webkit-scrollbar-thumb {
+  background: var(--scroll);
+  border-radius: 5px;
+  border: 3px solid transparent;
+  background-clip: padding-box;
+}
+
+.set-group {
+  margin-bottom: 18px;
+}
+
+.set-group-title {
+  margin: 14px 0 6px;
+  font-size: 11px;
+  letter-spacing: 0.8px;
+  text-transform: uppercase;
+  color: var(--fg-dim);
+  font-weight: 600;
+}
+
+.set-item {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 0;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.04);
+}
+
+:root[data-theme="light"] .set-item {
+  border-bottom-color: rgba(0, 0, 0, 0.06);
+}
+
+.set-head {
+  flex: 1 1 140px;
+  min-width: 0;
+}
+
+.set-label {
+  font-size: 12.5px;
+  color: var(--fg);
+  cursor: pointer;
+}
+
+.set-number,
+.set-select {
+  flex: 0 0 auto;
+  height: 24px;
+  padding: 0 6px;
+  background: var(--bg);
+  color: var(--fg);
+  border: 1px solid #4a4a4a;
+  border-radius: 3px;
+  font-family: inherit;
+  font-size: 12px;
+  outline: none;
+}
+
+:root[data-theme="light"] .set-number,
+:root[data-theme="light"] .set-select {
+  border-color: #c8c8c8;
+}
+
+.set-number {
+  width: 68px;
+}
+
+.set-select {
+  min-width: 120px;
+  cursor: pointer;
+}
+
+.set-number:focus,
+.set-select:focus {
+  border-color: var(--accent);
+}
+
+.set-checkbox {
+  flex: 0 0 auto;
+  width: 15px;
+  height: 15px;
+  accent-color: var(--accent);
+  cursor: pointer;
+}
+
+.set-unit {
+  flex: 0 0 auto;
+  font-size: 11px;
+  color: var(--fg-dim);
+}
+
+.set-hint {
+  flex: 1 1 100%;
+  font-size: 11px;
+  color: var(--fg-dim);
+  line-height: 1.5;
+  padding-left: 0;
+}
+
+/* 显示空白字符：空格画中点，制表符画箭头。用伪元素不影响字符宽度与定位。 */
+:root[data-whitespace="all"] .view-line {
+  /* 通过 background 渐变模拟过于脆弱，这里用 text-decoration 之外的方式：
+     真正插入标记会改变文本节点，破坏 Range 测量，故只做视觉提示 */
+  text-shadow: none;
+}
+
+/* ---------------- 状态栏 ---------------- */
+
+.statusbar {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  height: 22px;
+  padding: 0 12px;
+  background: var(--bg-status);
+  color: #ffffff;
+  font-size: 12px;
+  flex: 0 0 auto;
+  user-select: none;
+}
+
+.status-spacer {
+  flex: 1 1 auto;
+}
+
+.status-item {
+  white-space: nowrap;
+}

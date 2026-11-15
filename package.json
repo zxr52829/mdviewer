@@ -1,0 +1,37 @@
+{
+  "name": "mdviewer",
+  "version": "0.1.0",
+  "private": true,
+  "description": "照 Trae CN 编辑架构实现的最小文本编辑器，支持 Markdown / JSON",
+  "type": "module",
+  "scripts": {
+    "test": "node test/run-tests.js",
+    "serve": "node serve.js"
+  },
+  "supported": {
+    "markdown": [".md", ".markdown", ".mdown", ".mkd"],
+    "json": [".json", ".jsonc", ".json5", ".jsonl"]
+  },
+  "features": [
+    "文本模型与视图解耦（Piece Table）",
+    "视口虚拟滚动",
+    "状态机语法高亮 + 三层标记合成",
+    "代码补全（离线符号表 + 文档词频）",
+    "查找高亮：选区文字全文标黄",
+    "括号深度着色与配对",
+    "Markdown 实时预览（增量 DOM diff）",
+    "编辑器与预览滚动同步",
+    "JSON 校验 / 格式化 / 压缩",
+    "JSON 结构大纲",
+    "撤销重做",
+    "WebView2 原生窗口（GUI 构建）"
+  ],
+  "settings": {
+    "editor.lineHeight": 20,
+    "editor.charWidth": 8.4,
+    "editor.fontFamily": "JetBrains Mono",
+    "preview.debounceMs": 120
+  },
+  "noBytecode": true,
+  "entry": "index.html"
+}

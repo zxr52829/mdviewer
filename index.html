@@ -1,0 +1,123 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>mdviewer — 文本编辑架构</title>
+  <link rel="stylesheet" href="./styles.css" />
+</head>
+
+<body>
+  <header class="titlebar">
+    <div class="titlebar-left">
+      <span class="brand">mdviewer</span>
+      <span class="sep">/</span>
+      <span id="fileName" class="file-name">未打开文件</span>
+      <span id="dirtyLabel" class="dirty" hidden>●</span>
+    </div>
+    <div class="titlebar-actions">
+      <button id="btnNew" class="btn" title="新建文件 (Ctrl+N)">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6"/><path d="M12 18v-6"/><path d="M9 15h6"/></svg>
+      </button>
+      <button id="btnOpen" class="btn" title="打开文件 (Ctrl+O)">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg>
+      </button>
+      <button id="btnWorkspace" class="btn" title="切换工作区目录 (Ctrl+Shift+O)">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v1"/><path d="M3 7v10a2 2 0 0 0 2 2h9"/><path d="m17 21 4-4-4-4"/><path d="M21 17h-6"/></svg>
+      </button>
+      <span class="titlebar-divider"></span>
+      <button id="btnUndo" class="btn" title="撤销 (Ctrl+Z)">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 14 4 9l5-5"/><path d="M4 9h10a6 6 0 0 1 0 12h-3"/></svg>
+      </button>
+      <button id="btnRedo" class="btn" title="重做 (Ctrl+Shift+Z)">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m15 14 5-5-5-5"/><path d="M20 9H10a6 6 0 0 0 0 12h3"/></svg>
+      </button>
+      <span class="titlebar-divider"></span>
+      <button id="btnFormat" class="btn" title="格式化 (Ctrl+Shift+F)">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 6h16"/><path d="M4 12h10"/><path d="M4 18h13"/></svg>
+      </button>
+      <button id="btnMinify" class="btn" title="压缩 JSON">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 6h16"/><path d="M8 12h12"/><path d="M4 18h16"/></svg>
+      </button>
+      <span class="titlebar-divider"></span>
+      <button id="btnSettings" class="btn" title="设置">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.9l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.9-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.9.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.9 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.9l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.9.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.9-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.9V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/></svg>
+      </button>
+      <button id="btnSave" class="btn primary" title="保存 (Ctrl+S)">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/><path d="M17 21v-8H7v8"/><path d="M7 3v5h8"/></svg>
+        <span>保存</span>
+      </button>
+    </div>
+  </header>
+
+  <main class="workspace">
+    <aside id="sidebar" class="sidebar">
+      <div class="sidebar-header">
+        <span>文件</span>
+        <span id="rootPath" class="sidebar-root"></span>
+      </div>
+      <div id="fileTree" class="file-tree"></div>
+    </aside>
+
+    <div id="resizerLeft" class="resizer resizer-v" role="separator" aria-orientation="vertical" title="拖动调整宽度，双击恢复"></div>
+
+    <div id="editorPane" class="editor-pane">
+      <div id="editorRoot" class="editor-host"></div>
+    </div>
+
+    <div id="resizerRight" class="resizer resizer-v" role="separator" aria-orientation="vertical" title="拖动调整宽度，双击恢复"></div>
+
+    <section id="panel" class="side-panel" hidden>
+      <div class="panel-header">
+        <span id="panelTitle">预览</span>
+        <label class="sync-toggle">
+          <input type="checkbox" id="syncScroll" checked />
+          <span>跟随光标</span>
+        </label>
+      </div>
+      <div id="previewBody" class="panel-body preview-body"></div>
+    </section>
+  </main>
+
+  <footer class="statusbar">
+    <span id="statusLeft" class="status-item">就绪</span>
+    <span class="status-spacer"></span>
+    <span id="posLabel" class="status-item">行 1, 列 1</span>
+    <span id="sizeLabel" class="status-item">0 行</span>
+    <span id="langLabel" class="status-item">Plain Text</span>
+  </footer>
+
+  <!-- 设置面板：遮罩 + 右侧抽屉 -->
+  <div id="settingsOverlay" class="settings-overlay" hidden>
+    <div class="settings-drawer" role="dialog" aria-label="设置">
+      <div class="settings-head">
+        <h2>设置</h2>
+        <div class="settings-head-actions">
+          <button id="btnSettingsReset" class="btn" title="恢复默认">恢复默认</button>
+          <button id="btnSettingsClose" class="btn" title="关闭 (Esc)">关闭</button>
+        </div>
+      </div>
+      <div id="settingsBody" class="settings-body"></div>
+    </div>
+  </div>
+
+  <!-- 输入框弹层：替代 window.prompt。
+       原生 prompt 在部分 Chromium / Electron 环境里被禁用，直接返回 null，
+       表现为「点新建毫无反应」。自带一个不依赖原生对话框。 -->
+  <div id="promptOverlay" class="prompt-overlay" hidden>
+    <div class="prompt-box" role="dialog" aria-modal="true" aria-labelledby="promptTitle">
+      <div id="promptTitle" class="prompt-title">新建文件</div>
+      <input id="promptInput" class="prompt-input" type="text" autocomplete="off" spellcheck="false" />
+      <div id="promptError" class="prompt-error" hidden></div>
+      <div class="prompt-actions">
+        <button id="promptCancel" class="btn" type="button">取消</button>
+        <button id="promptOk" class="btn btn-primary" type="button">确定</button>
+      </div>
+    </div>
+  </div>
+
+  <script type="module" src="./src/app/main.js"></script>
+</body>
+
+</html>

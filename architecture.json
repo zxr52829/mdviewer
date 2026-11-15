@@ -1,0 +1,24 @@
+{
+  "project": "mdviewer",
+  "version": "0.1.0",
+  "transport": {
+    "http": "builtin",
+    "port": 5180
+  },
+  "editors": {
+    "markdown": {
+      "viewType": "mdviewer.markdown.preview",
+      "selector": [{ "filenamePattern": "*.md" }],
+      "priority": "default",
+      "pipeline": ["piece-tree", "text-model", "highlighter:markdown", "preview:markdown", "morph"]
+    },
+    "json": {
+      "viewType": "mdviewer.json.structure",
+      "selector": [{ "filenamePattern": "*.json" }],
+      "priority": "default",
+      "pipeline": ["piece-tree", "text-model", "highlighter:json", "json-service:validate+outline"]
+    }
+  },
+  "samples": ["samples/demo.json", "samples/welcome.md"],
+  "test": "node test/run-tests.js"
+}

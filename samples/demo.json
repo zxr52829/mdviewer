@@ -1,0 +1,25 @@
+{
+  "$schema": "https://example.invalid/demo-schema.json",
+  "name": "mdviewer-demo",
+  "version": "0.1.0",
+  "enabled": true,
+  "count": 42,
+  "ratio": 3.14,
+  "tags": ["markdown", "json", "editor"],
+  "nested": {
+    "deep": {
+      "level": 3,
+      "note": "用于验证 JSON 大纲与折叠范围"
+    },
+    "emptyObject": {},
+    "emptyArray": []
+  },
+  "matrix": [
+    [1, 2, 3],
+    [4, 5, 6],
+    [7, 8, 9]
+  ],
+  "unicode": "中文 · 日本語 · 한국어 · emoji 🎯",
+  "escaped": "引号\"与反斜杠\\与换行\n已转义",
+  "nullValue": null
+}
