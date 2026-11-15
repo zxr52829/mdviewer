@@ -14,6 +14,7 @@ import {
   countDiagnostics,
   groupByLine as groupDiagnosticsByLine,
 } from '../src/lang/diagnostics.js';
+import { diffLines, diffStats } from '../src/app/line-diff.js';
 
 let passed = 0;
 let failed = 0;
@@ -662,6 +663,39 @@ function eq(name, actual, expected) {
     const d = diag('}\n)', 'javascript');
     ok('结果按行列升序', d.length === 2 && d[0].line <= d[1].line);
   }
+}
+
+/* ================= AI 改写 diff ================= */
+
+{
+  const rows = (a, b) => diffLines(a, b);
+  const rebuild = (rowsArr) => ({
+    a: rowsArr.filter((r) => r.type !== 'add').map((r) => r.text),
+    b: rowsArr.filter((r) => r.type !== 'del').map((r) => r.text),
+  });
+
+  const cases = [
+    { a: ['a', 'b', 'c'], b: ['a', 'b', 'c'], name: '完全相同' },
+    { a: ['a', 'b', 'c'], b: ['a', 'x', 'c'], name: '中间改一行' },
+    { a: ['a', 'b'], b: ['a', 'b', 'c'], name: '末尾加一行' },
+    { a: ['a', 'b', 'c'], b: ['a'], name: '删两行' },
+    { a: [], b: ['x'], name: '空到一行' },
+    { a: ['x'], b: [], name: '一行到空' },
+    { a: ['1', '2', '3', '4', '5'], b: ['1', '3', '4', '5', '6'], name: '首删尾增' },
+  ];
+
+  for (const c of cases) {
+    const r = rows(c.a, c.b);
+    const re = rebuild(r);
+    ok(`diff 可重建原文：${c.name}`, JSON.stringify(re.a) === JSON.stringify(c.a), JSON.stringify(re.a));
+    ok(`diff 可重建新文：${c.name}`, JSON.stringify(re.b) === JSON.stringify(c.b), JSON.stringify(re.b));
+  }
+
+  {
+    const s = diffStats(rows(['a', 'b'], ['a', 'x', 'y']));
+    ok('diff 统计增删', s.added === 2 && s.removed === 1, JSON.stringify(s));
+  }
+  ok('相同内容零增删', diffStats(rows(['a'], ['a'])).added === 0);
 }
 
 /* ================= 汇总 ================= */

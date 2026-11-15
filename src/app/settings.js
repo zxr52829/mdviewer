@@ -165,6 +165,33 @@ export const SETTINGS_SCHEMA = [
       },
     ],
   },
+  {
+    group: 'AI 改写',
+    items: [
+      {
+        id: 'ai.contextLines',
+        label: '上下文行数',
+        type: 'number',
+        default: 20,
+        min: 0,
+        max: 200,
+        unit: '行',
+        apply: 'self',
+        hint: '选区前后各取多少行给模型参考。只影响理解，不会被替换',
+      },
+      {
+        id: 'ai.maxSelectionKb',
+        label: '选区上限',
+        type: 'number',
+        default: 40,
+        min: 1,
+        max: 200,
+        unit: 'KB',
+        apply: 'self',
+        hint: '超过这个体积拒绝改写：既超出模型有效上下文，也通常是误选',
+      },
+    ],
+  },
 ];
 
 /** 扁平化的 id → 定义 */

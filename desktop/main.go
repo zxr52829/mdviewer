@@ -137,6 +137,10 @@ func main() {
 	mux.HandleFunc("/api/pick", srv.handlePick)
 	mux.HandleFunc("/api/pickdir", srv.handlePickDir)
 	mux.HandleFunc("/api/root", srv.handleRoot)
+	// AI 选区改写。key 只在 Go 侧流转，永不回传前端。
+	mux.HandleFunc("/api/ai/status", srv.handleAIStatus)
+	mux.HandleFunc("/api/ai/key", srv.handleAISaveKey)
+	mux.HandleFunc("/api/ai/rewrite", srv.handleAIRewrite)
 	// 其余路径交给静态资源；找不到时回退到 index.html，支持 ?file= 直达
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		if strings.HasPrefix(r.URL.Path, "/api/") {

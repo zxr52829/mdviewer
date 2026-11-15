@@ -17,6 +17,7 @@ import { languageFromPath, basename, PREVIEWABLE, VALIDATABLE, LANGUAGE_LABELS }
 import { readFile, saveFile, listDir, pickFile, pickDirectory, setRoot, createFile, detectBackend, backendMode, backendRoot } from './api.js';
 import { loadSettings, saveSettings, applySettings, defaultSettings, FONT_STACKS } from './settings.js';
 import { SettingsPanel } from './settings-panel.js';
+import { AiRewritePanel } from './ai-panel.js';
 import { makeResizer } from './resizer.js';
 
 const PREVIEW_DEBOUNCE_MS = 120;
@@ -39,6 +40,68 @@ export class App {
     this._wireToolbar();
     this._initSettingsPanel();
     this._wireResizers();
+    this._initAiPanel();
+  }
+
+  /**
+   * 初始化 AI 改写面板。
+   *
+   * 面板只做「选中 → 指令 → diff → 应用」这一条链路：
+   * 请求与 key 都在 Go 侧（前端拿到 key 就等于它已经泄露，仓库有公开镜像）。
+   */
+  _initAiPanel() {
+    this.aiPanel = new AiRewritePanel(document.body, {
+      getSettings: () => this.settings,
+      getVersion: () => this.model?.version,
+      applyEdit: (text, offset, deleteCount) => {
+        if (!this.model) return;
+        this.model.edit(offset, deleteCount, text);
+        // 编辑后把光标放到新文本末尾，方便接着改
+        const pos = this.model.offsetToPosition(offset + text.length);
+        this.view?.setCursor(pos.line, pos.column);
+        this.view?.afterEdit();
+        this.dom.statusLeft.textContent = `AI 改写已应用（Ctrl+Z 可撤销）`;
+      },
+      notify: (msg) => {
+        this.dom.statusLeft.textContent = msg;
+      },
+    });
+  }
+
+  /** Ctrl+K：对当前选区发起 AI 改写 */
+  openAiRewrite() {
+    if (!this.model || !this.view) return;
+    const sel = this.view.selection;
+    if (!sel) {
+      this.dom.statusLeft.textContent = '先选中要改写的代码，再按 Ctrl+K';
+      return;
+    }
+    const text = this.model.getValue();
+    const a = this.model.positionToOffset(sel.start.line, sel.start.column);
+    const b = this.model.positionToOffset(sel.end.line, sel.end.column);
+    const selected = text.substring(a, b);
+    if (!selected.trim()) {
+      this.dom.statusLeft.textContent = '选区是空的';
+      return;
+    }
+
+    // 上下文按设置里的行数取，只给模型理解，不参与替换
+    const lines = Number(this.settings['ai.contextLines'] ?? 20);
+    const allLines = text.split('\n');
+    const beforeStart = Math.max(0, sel.start.line - 1 - lines);
+    const afterEnd = Math.min(allLines.length, sel.end.line + lines);
+    const contextBefore = allLines.slice(beforeStart, sel.start.line - 1).join('\n');
+    const contextAfter = allLines.slice(sel.end.line, afterEnd).join('\n');
+
+    this.aiPanel.open({
+      selected,
+      offset: a,
+      deleteCount: b - a,
+      version: this.model.version,
+      language: this.model.languageId,
+      contextBefore,
+      contextAfter,
+    });
   }
 
   /**
@@ -591,6 +654,10 @@ export class App {
       if (e.shiftKey && k === 'f') {
         e.preventDefault();
         this.formatDocument();
+      }
+      if (!e.shiftKey && k === 'k') {
+        e.preventDefault();
+        this.openAiRewrite();
       }
     });
   }

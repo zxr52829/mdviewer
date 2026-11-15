@@ -204,3 +204,74 @@ export async function createFile(path, content = '') {
   if (!res.ok) throw new Error((data && data.error) || '新建失败');
   return data;
 }
+
+/* ---------------- AI 改写 ---------------- */
+
+/**
+ * 查询 AI 能力状态。
+ *
+ * 只回「是否已配置」，key 本身永不跨进程到前端 —— 仓库有公开镜像，
+ * 任何进前端代码或响应体的 key 都等于已经泄露。
+ *
+ * @returns {Promise<{configured:boolean, model:string, source:'env'|'file'|'none'}>}
+ */
+export async function aiStatus() {
+  await detectBackend();
+  if (state.mode !== 'exe') {
+    return { configured: false, model: '', source: 'none', reason: 'static' };
+  }
+  try {
+    return await getJSON('/api/ai/status');
+  } catch {
+    return { configured: false, model: '', source: 'none', reason: 'error' };
+  }
+}
+
+/** 写入 API key。key 只落到本机配置文件，不在前端留存。 */
+export async function aiSaveKey(apiKey) {
+  await detectBackend();
+  if (state.mode !== 'exe') throw new Error('静态模式无法保存 key（需要 exe 后端代理）');
+  const res = await fetch('/api/ai/key', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ apiKey }),
+  });
+  const text = await res.text();
+  let data = null;
+  try {
+    data = text ? JSON.parse(text) : null;
+  } catch {
+    throw new Error('保存 key 的响应格式异常');
+  }
+  if (!res.ok) throw new Error((data && data.error) || `保存失败 ${res.status}`);
+  return data;
+}
+
+/**
+ * 执行一次选区改写。
+ *
+ * @param {{selected:string, instruction:string, language?:string,
+ *          contextBefore?:string, contextAfter?:string}} payload
+ * @returns {Promise<{text:string, usage?:{promptTokens:number, completionTokens:number}}>}
+ */
+export async function aiRewrite(payload) {
+  await detectBackend();
+  if (state.mode !== 'exe') {
+    throw new Error('静态模式没有 AI 代理，请用 exe 启动');
+  }
+  const res = await fetch('/api/ai/rewrite', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+  });
+  const text = await res.text();
+  let data = null;
+  try {
+    data = text ? JSON.parse(text) : null;
+  } catch {
+    // Go 侧的非 JSON 错误走 http.Error，是纯文本
+    throw new Error(text.slice(0, 200) || `改写失败 ${res.status}`);
+  }
+  if (!res.ok) throw new Error((data && data.error) || `改写失败 ${res.status}`);
+  return data;
+}
