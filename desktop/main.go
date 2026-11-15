@@ -26,6 +26,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 )
 
 //go:embed web
@@ -293,6 +294,28 @@ func writeJSON(w http.ResponseWriter, code int, v any) {
 	_ = json.NewEncoder(w).Encode(v)
 }
 
+// decodeBodyUTF8 读取并解析请求体，同时拒绝非法 UTF-8。
+//
+// 为什么必须校验：encoding/json 遇到非法 UTF-8 字节不会报错，
+// 而是把每个坏字节静默替换成 U+FFFD，然后原样写盘。
+// 结果是用户在非 UTF-8 工具链里调用本 API 时，中文内容被永久毁掉，
+// 而且接口返回 200，看不出任何异常。
+//
+// 宁可返回 400 让调用方重发，也不能写坏用户的文件。
+func decodeBodyUTF8(r *http.Request, dst any) error {
+	body, err := io.ReadAll(io.LimitReader(r.Body, maxReadSize))
+	if err != nil {
+		return errors.New("请求体读取失败")
+	}
+	if !utf8.Valid(body) {
+		return errors.New("请求体不是合法 UTF-8，请检查发送端的文本编码")
+	}
+	if err := json.Unmarshal(body, dst); err != nil {
+		return errors.New("请求格式错误")
+	}
+	return nil
+}
+
 func (s *server) handleInfo(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{
 		"app":     appName,
@@ -399,6 +422,17 @@ func (s *server) handleRead(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// 非 UTF-8 文件必须拒绝，不能"尽力而为"地返回。
+	// 转成 string 交给 json 编码时，坏字节会被静默替换成 U+FFFD，
+	// 编辑器里显示的是被篡改的内容；用户一旦保存，原文件就真的毁了。
+	// 明确报错，比让他以为一切正常安全得多。
+	if !utf8.Valid(data) {
+		writeJSON(w, http.StatusUnsupportedMediaType, map[string]string{
+			"error": "文件不是 UTF-8 编码，为免损坏内容已拒绝打开（可用其他工具转码后重试）",
+		})
+		return
+	}
+
 	writeJSON(w, http.StatusOK, map[string]any{
 		"path":    pathRel,
 		"name":    filepath.Base(abs),
@@ -465,13 +499,8 @@ func (s *server) handleRoot(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		Path string `json:"path"`
 	}
-	body, err := io.ReadAll(io.LimitReader(r.Body, 4096))
-	if err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "请求体读取失败"})
-		return
-	}
-	if err := json.Unmarshal(body, &req); err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "请求格式错误"})
+	if err := decodeBodyUTF8(r, &req); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
 		return
 	}
 
@@ -530,13 +559,8 @@ func (s *server) handleCreate(w http.ResponseWriter, r *http.Request) {
 		Path    string `json:"path"`
 		Content string `json:"content"`
 	}
-	body, err := io.ReadAll(io.LimitReader(r.Body, 1<<20))
-	if err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "请求体读取失败"})
-		return
-	}
-	if err := json.Unmarshal(body, &req); err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "请求格式错误"})
+	if err := decodeBodyUTF8(r, &req); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
 		return
 	}
 
@@ -583,13 +607,8 @@ func (s *server) handleSave(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var req saveReq
-	body, err := io.ReadAll(io.LimitReader(r.Body, maxReadSize))
-	if err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "请求体读取失败"})
-		return
-	}
-	if err := json.Unmarshal(body, &req); err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "请求格式错误"})
+	if err := decodeBodyUTF8(r, &req); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
 		return
 	}
 
