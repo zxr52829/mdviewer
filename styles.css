@@ -13,6 +13,10 @@
   --selection: #264f78;
   --scroll: #4e4e4e;
 
+  /* 诊断：与 VS Code Dark+ 的 errorForeground / editorWarning.foreground 对齐 */
+  --diag-error: #f14c4c;
+  --diag-warning: #cca700;
+
   --tk-keyword: #569cd6;
   --tk-string: #ce9178;
   --tk-number: #b5cea8;
@@ -51,6 +55,10 @@
   --caret: #333333;
   --selection: #add6ff;
   --scroll: #c1c1c1;
+
+  /* 浅色下同一组语义色需要更深，否则白底上看不见 */
+  --diag-error: #e51400;
+  --diag-warning: #bf8803;
 
   --tk-keyword: #0000ff;
   --tk-string: #a31515;
@@ -515,6 +523,77 @@ body {
   text-align: right;
   user-select: none;
 }
+
+/* 行号与诊断标记分离：行号右对齐，标记固定在行号左侧的窄槽位。
+   挤在同一个文本节点里会让标记随行号一起被选中。 */
+.view-gutter-line {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 4px;
+}
+
+.gutter-num {
+  min-width: 1.6em;
+  text-align: right;
+}
+
+.gutter-mark {
+  width: 10px;
+  height: 10px;
+  flex: 0 0 10px;
+  border-radius: 50%;
+  display: inline-block;
+}
+
+.gutter-mark-error {
+  background: var(--diag-error);
+}
+
+.gutter-mark-warn {
+  background: var(--diag-warning);
+}
+
+/* 诊断波浪线层：绝对定位铺满整行，子元素是实测出来的矩形块。
+   用 wavy 边框而不是给每个字符套 span —— 套 span 会打断
+   renderLineHtml 拼好的 token 节点，且大文件下分配开销不可接受。 */
+.diag-layer {
+  position: absolute;
+  left: 0;
+  top: 0;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+  z-index: 2;
+}
+
+.diag-squiggle {
+  position: absolute;
+  box-sizing: border-box;
+  /* 45° 细斜纹在 2px 高度内重复，视觉上就是锯齿波浪。
+     比 CSS 的 underline wavy 更可控（后者无法只作用于定位块）。 */
+  background-repeat: repeat-x;
+  background-position: bottom left;
+  background-size: 100% 2px;
+  opacity: 0.95;
+}
+
+.diag-squiggle.diag-error {
+  background-image: repeating-linear-gradient(
+    135deg,
+    transparent 0 2px,
+    var(--diag-error) 2px 3px
+  );
+}
+
+.diag-squiggle.diag-warning {
+  background-image: repeating-linear-gradient(
+    135deg,
+    transparent 0 2px,
+    var(--diag-warning) 2px 3px
+  );
+}
+
 
 .editor-content {
   position: absolute;
@@ -1305,4 +1384,24 @@ body.resizing-v * {
 
 .status-item {
   white-space: nowrap;
+}
+
+/* 诊断计数：可点击跳转，因此用 button 而不是 span（原生可聚焦、可回车） */
+.status-diag {
+  border: none;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+  padding: 0 6px;
+  border-radius: 3px;
+}
+
+.status-diag:hover {
+  background: rgba(255, 255, 255, 0.18);
+}
+
+.status-diag:focus-visible {
+  outline: 1px solid rgba(255, 255, 255, 0.7);
+  outline-offset: 1px;
 }

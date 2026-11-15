@@ -27,6 +27,11 @@ import { getWordAtPosition } from '../lang/language-config.js';
 import { shouldDeletePair } from '../lang/edit-behavior.js';
 import { lineBracketDepths, computeLineDepths, findMatchingBracket } from '../lang/brackets.js';
 import { getCompletions } from '../lang/completion.js';
+import {
+  collectDiagnostics,
+  countDiagnostics,
+  groupByLine as groupDiagnosticsByLine,
+} from '../lang/diagnostics.js';
 import { SuggestWidget } from './suggest-widget.js';
 
 const ROW_HEIGHT = 20;
@@ -35,6 +40,7 @@ const PAD_LEFT = 12;
 const RIGHT_PAD = 24; // 行尾留白，避免光标贴住右边界
 const GUTTER_WIDTH = 56; // 必须与 .editor-gutter 的 CSS 宽度一致
 const TAB_SIZE = 2;
+const DIAG_DEBOUNCE = 300; // ms，用户停手后才跑全量诊断
 
 export class EditorView {
   /**
@@ -57,7 +63,7 @@ export class EditorView {
     this._desiredColumn = 1;
     this._scrollTop = 0;
     this._highlightCache = new Map(); // lineNumber -> {version, html}
-    this._listeners = { cursor: new Set(), content: new Set() };
+    this._listeners = { cursor: new Set(), content: new Set(), diagnostics: new Set() };
 
     // 度量一律运行时实测。等宽字体只对 ASCII 同宽，CJK 与全角标点是
     // 另一档宽度，且字体回退（JetBrains Mono 缺失 → Consolas）会改变
@@ -77,6 +83,16 @@ export class EditorView {
     this._matchByLine = null; // Map<line, ranges[]>
     this._matchCount = 0;
     this._findRevision = 0; // 命中态变化时递增，用于让行渲染缓存失效
+
+    // 诊断状态：diagnostics.js 的结果按行分组 + 计数。
+    // 诊断不参与 renderLineHtml 的边界并集（波浪线走 CSS text-decoration，
+    // 装订线走独立子元素），所以只需要一个 revision 让缓存失效。
+    this._diagByLine = null; // Map<line, diagnostics[]>
+    this._diagList = [];
+    this._diagCounts = { errors: 0, warnings: 0, total: 0 };
+    this._diagRevision = 0;
+    this._diagVersion = -1; // 已经诊断过的 model.version
+    this._diagTimer = null;
 
     this._buildDom();
     this._bindEvents();
@@ -402,6 +418,9 @@ export class EditorView {
     this.renderVisible();
     this._renderCursor();
     this._emit('cursor', this.cursor);
+    // 格式化、压缩、外部整文件替换都走 refresh，诊断同样要跟上。
+    // 这里用立即执行而非防抖：这些操作本身就是一次性的终态变化。
+    this._scheduleDiagnostics();
   }
 
   /**
@@ -580,11 +599,20 @@ export class EditorView {
     const gutter = document.createElement('div');
     gutter.className = 'view-gutter-line';
     gutter.style.top = `${PAD_TOP + (lineNo - 1) * this._lh}px`;
-    gutter.textContent = String(lineNo);
+
+    // 行号与诊断标记分两个节点：直接写 textContent 塞不进标记，
+    // 而混进同一个文本节点会让标记随行号一起被选中/复制。
+    const num = document.createElement('span');
+    num.className = 'gutter-num';
+    num.textContent = String(lineNo);
+    const mark = document.createElement('span');
+    mark.className = 'gutter-mark';
+    gutter.appendChild(num);
+    gutter.appendChild(mark);
 
     this.rows.appendChild(row);
     this.gutter.appendChild(gutter);
-    this._lineEls.set(lineNo, { row, gutter });
+    this._lineEls.set(lineNo, { row, gutter, gutterMark: mark, gutterNum: num });
   }
 
   /**
@@ -746,9 +774,13 @@ export class EditorView {
     const hlCols = this._bracketHighlight ? this._bracketHighlight.get(lineNo) : null;
     const bracketKey = hlCols ? Array.from(hlCols).sort((a, b) => a - b).join(',') : '0';
 
+    const diagRanges = this._diagByLine ? this._diagByLine.get(lineNo) : null;
+    const diagKey = diagRanges ? diagRanges.length + ':' + this._diagRevision : '0';
+
     let cached = this._highlightCache.get(lineNo);
     if (!cached || cached.version !== this.model.version ||
-        cached.matchKey !== matchKey || cached.bracketKey !== bracketKey) {
+        cached.matchKey !== matchKey || cached.bracketKey !== bracketKey ||
+        cached.diagKey !== diagKey) {
       const text = this.model.getLineContent(lineNo);
 
       let mask = null;
@@ -775,6 +807,7 @@ export class EditorView {
         version: this.model.version,
         matchKey,
         bracketKey,
+        diagKey,
         html: renderLineHtml(text, this.model.languageId, mask, bracketMap, highlight),
         text,
       };
@@ -791,6 +824,137 @@ export class EditorView {
       els.textNodes = null;
       els.textKey = undefined;
     }
+
+    this._applyDiagnosticMarks(lineNo, els, diagRanges);
+  }
+
+  /**
+   * 把诊断画到已渲染的行上。
+   *
+   * 两条独立通道：
+   *   - 装订线：往 gutterMark 里塞一个圆点。与行号节点分离，不互相覆盖。
+   *   - 行内：用 CSS text-decoration 波浪线。不并入 renderLineHtml 的
+   *     边界并集 —— 走那条路要与 token/match/bracket 三层切割对齐，
+   *     改动面大且容易互相切断着色。text-decoration 不能跨行，正好符合
+   *     「错误区间只标到行尾」的要求。
+   *
+   * @param {number} lineNo
+   * @param {{gutterMark:HTMLElement,row:HTMLElement}} els
+   * @param {Array|undefined} ranges 该行的诊断
+   */
+  _applyDiagnosticMarks(lineNo, els, ranges) {
+    // ---- 装订线 ----
+    const mark = els.gutterMark;
+    if (mark) {
+      const want = !ranges || !ranges.length
+        ? ''
+        : (ranges.some((d) => d.severity === 'error') ? 'error' : 'warn');
+      if (mark.dataset.sev !== want) {
+        mark.dataset.sev = want;
+        mark.className = want ? `gutter-mark gutter-mark-${want}` : 'gutter-mark';
+      }
+    }
+
+    // ---- 行内波浪线 ----
+    const row = els.row;
+    if (!ranges || !ranges.length) {
+      // 必须主动移除 overlay 容器：innerHTML 重绘只在 html 变化时发生，
+      // 而修好一个错误后本行 html 可能完全没变（比如只改了一个字符），
+      // 光靠重绘清不掉上一轮的波浪线，标记就会残留在正确代码上。
+      const stale = row.querySelector('.diag-layer');
+      if (stale) stale.remove();
+      delete row.dataset.diag;
+      return;
+    }
+
+    this._paintDiagnosticOverlay(lineNo, row, ranges);
+  }
+
+  /**
+   * 画错误区间的波浪线。
+   *
+   * 用绝对定位的矩形块 + CSS wavy 边框，而不是给每个字符套 span：
+   * 套 span 会打碎 renderLineHtml 已经拼好的 token 节点，
+   * 而且 9000 行文件里每行套几十个 span 的分配开销不可接受。
+   *
+   * 几何一律来自 Range 实测（见 KERNEL 里的像素几何约定），
+   * 不用「字宽 × 列号」推算 —— CJK 混排会漂移。
+   */
+  _paintDiagnosticOverlay(lineNo, row, ranges) {
+    const text = this.model.getLineContent(lineNo);
+    if (!text) return;
+
+    // collectTextNodes 返回 {node, startCol, len}，是按行内字符累计的，
+    // 正好可以直接用来把「列号」映射到具体文本节点。
+    // 它走 TreeWalker 会扫到 .diag-layer 里的节点，但那个容器是纯定位的
+    // 空 div（无文本子节点），不会污染累计列。
+    const entries = collectTextNodes(row);
+    if (!entries.length) return;
+
+    // 复用已有的 overlay 容器
+    let layer = row.querySelector('.diag-layer');
+    if (!layer) {
+      layer = document.createElement('div');
+      layer.className = 'diag-layer';
+      row.appendChild(layer);
+    }
+    layer.textContent = '';
+
+    const rowRect = row.getBoundingClientRect();
+    for (const d of ranges) {
+      const startCol = Math.max(0, Math.min(d.column - 1, text.length));
+      const endCol = Math.max(startCol + 1, Math.min(startCol + (d.length || 1), text.length));
+      const rects = this._rangeRects(entries, startCol, endCol);
+      for (const r of rects) {
+        const box = document.createElement('div');
+        box.className = `diag-squiggle diag-${d.severity}`;
+        box.style.left = `${r.left - rowRect.left}px`;
+        box.style.width = `${Math.max(2, r.width)}px`;
+        box.style.top = `${r.top - rowRect.top}px`;
+        box.style.height = `${r.height}px`;
+        box.title = d.message;
+        layer.appendChild(box);
+      }
+    }
+    if (!layer.childNodes.length) layer.remove();
+  }
+
+  /**
+   * 把行内字符列区间映射成屏幕矩形。
+   *
+   * @param {Array<{node:Text,startCol:number,len:number}>} entries collectTextNodes 结果
+   * @param {number} startCol 起始列（0-based，行内字符偏移）
+   * @param {number} endCol 结束列（不含）
+   * @returns {DOMRect[]}
+   */
+  _rangeRects(entries, startCol, endCol) {
+    let startNode = null;
+    let startOffset = 0;
+    let endNode = null;
+    let endOffset = 0;
+
+    for (const e of entries) {
+      if (startNode === null && startCol < e.startCol + e.len) {
+        startNode = e.node;
+        startOffset = startCol - e.startCol;
+      }
+      if (endCol <= e.startCol + e.len) {
+        endNode = e.node;
+        endOffset = endCol - e.startCol;
+        break;
+      }
+    }
+    if (!startNode || !endNode) return [];
+
+    const range = document.createRange();
+    try {
+      range.setStart(startNode, Math.max(0, Math.min(startOffset, startNode.nodeValue.length)));
+      range.setEnd(endNode, Math.max(0, Math.min(endOffset, endNode.nodeValue.length)));
+    } catch {
+      return [];
+    }
+    // Range 跨节点时会返回多个矩形，逐个画；跨行部分由 setEnd 天然截断
+    return Array.from(range.getClientRects()).filter((r) => r.width > 0 || r.height > 0);
   }
 
   /* ---------------- 光标与选区 ---------------- */
@@ -1621,6 +1785,133 @@ export class EditorView {
     this._ensureVisible();
     this._renderCursor();
     this._emit('cursor', this.cursor);
+    // 诊断防抖重启。放在这里而不是 renderVisible 里：
+    // 渲染是热路径（滚动每帧都跑），诊断必须只在内容变化后跑。
+    this._scheduleDiagnostics();
+  }
+
+  /* ---------------- 诊断 ---------------- */
+
+  /**
+   * 防抖调度诊断。
+   *
+   * 全量诊断在 9000 行文件上是一次 O(n) 扫描，同步跑会直接掉帧
+   * （性能基线 3.4ms/键）。这里延迟 300ms，用户停手才跑。
+   */
+  _scheduleDiagnostics() {
+    if (this._diagTimer) clearTimeout(this._diagTimer);
+    this._diagTimer = setTimeout(() => {
+      this._diagTimer = null;
+      this._runDiagnostics();
+    }, DIAG_DEBOUNCE);
+  }
+
+  /** 立即跑一次诊断（打开文件、切语言时用，不等防抖） */
+  runDiagnosticsNow() {
+    if (this._diagTimer) {
+      clearTimeout(this._diagTimer);
+      this._diagTimer = null;
+    }
+    this._runDiagnostics();
+  }
+
+  /** 实际执行诊断并应用结果 */
+  _runDiagnostics() {
+    if (!this.model) return;
+    // 未改动就复用上次结果：滚动、光标移动不该触发重算
+    if (this._diagVersion === this.model.version) return;
+
+    const text = this.model.getValue();
+    const languageId = this.model.languageId;
+    const list = collectDiagnostics(text, languageId);
+
+    this._diagList = list;
+    this._diagByLine = groupDiagnosticsByLine(list);
+    this._diagCounts = countDiagnostics(list);
+    this._diagVersion = this.model.version;
+    this._diagRevision++;
+
+    // 诊断变了：行缓存整体失效（波浪线与装订线都挂在行上）
+    this._highlightCache.clear();
+    this.renderVisible();
+    this._emit('diagnostics', this.diagnostics);
+  }
+
+  /** 清除诊断（切换文件、关闭时用，避免旧标记残留） */
+  clearDiagnostics() {
+    if (this._diagTimer) {
+      clearTimeout(this._diagTimer);
+      this._diagTimer = null;
+    }
+    const had = this._diagList.length > 0;
+    this._diagList = [];
+    this._diagByLine = null;
+    this._diagCounts = { errors: 0, warnings: 0, total: 0 };
+    this._diagVersion = -1;
+    if (had) {
+      this._diagRevision++;
+      this._highlightCache.clear();
+      this.renderVisible();
+      this._emit('diagnostics', this.diagnostics);
+    } else {
+      this._emit('diagnostics', this.diagnostics);
+    }
+  }
+
+  /** 当前诊断快照 */
+  get diagnostics() {
+    return {
+      items: this._diagList,
+      ...this._diagCounts,
+    };
+  }
+
+  /**
+   * 销毁视图：清掉所有悬挂的定时器与监听。
+   *
+   * openText 会重建视图，旧实例若只置 null，防抖定时器仍会在
+   * 300ms 后触发一次全量诊断，对着已脱离文档的 DOM 干活。
+   */
+  destroy() {
+    if (this._diagTimer) {
+      clearTimeout(this._diagTimer);
+      this._diagTimer = null;
+    }
+    if (this._resizeObserver) {
+      this._resizeObserver.disconnect();
+      this._resizeObserver = null;
+    }
+    this._listeners = { cursor: new Set(), content: new Set(), diagnostics: new Set() };
+    this._lineEls.clear();
+    this._highlightCache.clear();
+    this._diagByLine = null;
+    this._diagList = [];
+    this._diagCounts = { errors: 0, warnings: 0, total: 0 };
+    this._diagVersion = -1;
+  }
+
+  /**
+   * 跳到下一个诊断位置。
+   *
+   * 语义对齐 VS Code 的「转到下一个问题」：从当前光标往后找，
+   * 到末尾则回绕到第一个。找不到返回 false。
+   */
+  goToNextDiagnostic() {
+    if (!this._diagList.length) return false;
+    const cur = this._cursor;
+    const curOff = this.model.positionToOffset(cur.line, cur.column);
+
+    for (const d of this._diagList) {
+      const off = this.model.positionToOffset(d.line, d.column);
+      if (off > curOff) {
+        this.setCursor(d.line, d.column);
+        return true;
+      }
+    }
+    // 回绕
+    const first = this._diagList[0];
+    this.setCursor(first.line, first.column);
+    return true;
   }
 
   _moveHorizontal(delta, extend) {

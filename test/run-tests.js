@@ -9,6 +9,11 @@ import { tokenizeLine, renderLineHtml } from '../src/lang/highlighter.js';
 import * as json from '../src/lang/json-service.js';
 import { renderMarkdown } from '../src/preview/markdown-renderer.js';
 import { languageFromPath } from '../src/lang/registry.js';
+import {
+  collectDiagnostics,
+  countDiagnostics,
+  groupByLine as groupDiagnosticsByLine,
+} from '../src/lang/diagnostics.js';
 
 let passed = 0;
 let failed = 0;
@@ -588,6 +593,75 @@ function eq(name, actual, expected) {
 
   // 候选必需字段完整
   ok('候选项字段完整', r1.items.every((i) => i.label && i.kind && typeof i.score === 'number'));
+}
+
+/* ================= 诊断 ================= */
+
+{
+  const diag = (text, lang) => collectDiagnostics(text, lang);
+
+  // --- JSON 家族复用 validate ---
+  ok('JSON 尾逗号报错', diag('{"a":1,}', 'json').length === 1);
+  ok('JSON 合法无诊断', diag('{"a":1}', 'json').length === 0);
+  ok('JSONC 注释不算错', diag('{"a":1, /*c*/ "b":2}', 'jsonc').length === 0);
+  ok('JSONL 多行合法', diag('{"a":1}\n{"b":2}', 'jsonl').length === 0);
+  ok('JSON 诊断源自 json', diag('{bad}', 'json')[0]?.source === 'json');
+
+  // --- 词法 ---
+  {
+    const d = diag('const x = "abc\nconst y = 1;', 'javascript');
+    const lex = d.filter((x) => x.source === 'lexer');
+    ok('未闭合字符串被报', lex.length === 1 && lex[0].severity === 'error');
+    ok('未闭合字符串定位到起始引号', lex[0]?.column === 11 && lex[0]?.length === 4);
+  }
+
+  // --- 跨行块注释掩码（关键回归点）---
+  {
+    const d = diag('/*\n  foo( bar\n*/\nconst y = 1;', 'javascript');
+    ok('跨行块注释内括号不误报', d.filter((x) => x.source === 'bracket').length === 0);
+  }
+  ok('未闭合块注释被报',
+    diag('/*\nfoo( bar\nconst y = 1;', 'javascript')
+      .some((x) => x.source === 'lexer' && /块注释/.test(x.message)));
+
+  // --- 括号配对 ---
+  {
+    const d = diag('function f() {\n  return 1;\n', 'javascript');
+    ok('未闭合花括号报 error',
+      d.length === 1 && d[0].severity === 'error' && d[0].source === 'bracket');
+  }
+  ok('多余右括号报 warning',
+    diag('const a = (1 + 2));', 'javascript').every((x) => x.severity === 'warning'));
+  ok('字符串内括号不参与配对', diag('const s = "(((";', 'javascript').length === 0);
+  ok('正常配对无诊断', diag('const a = [1,2,3];', 'javascript').length === 0);
+
+  // --- 语言差异 ---
+  ok('Python # 注释被识别', diag('# 注释 ( \nx = 1', 'python').length === 0);
+  ok('SQL -- 注释被识别', diag('-- 注释 ( \nselect 1;', 'sql').length === 0);
+  ok('YAML 不做括号配对', diag('a: (b\nc: d', 'yaml').length === 0);
+  ok('HTML 不做括号配对', diag('<div class="a">\n</div>', 'html').length === 0);
+  ok('markdown 无诊断', diag('```js\n(((\n```', 'markdown').length === 0);
+  ok('plaintext 无诊断', diag('(((((', 'plaintext').length === 0);
+
+  // --- 计数与分组 ---
+  {
+    const c = countDiagnostics([
+      { severity: 'error' }, { severity: 'error' }, { severity: 'warning' },
+    ]);
+    ok('计数正确', c.errors === 2 && c.warnings === 1 && c.total === 3);
+  }
+  {
+    const g = groupDiagnosticsByLine([
+      { line: 1, column: 1 }, { line: 2, column: 3 }, { line: 1, column: 9 },
+    ]);
+    ok('按行分组', g.size === 2 && g.get(1).length === 2 && g.get(2).length === 1);
+  }
+
+  // --- 排序 ---
+  {
+    const d = diag('}\n)', 'javascript');
+    ok('结果按行列升序', d.length === 2 && d[0].line <= d[1].line);
+  }
 }
 
 /* ================= 汇总 ================= */

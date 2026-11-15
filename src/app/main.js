@@ -20,6 +20,7 @@ async function boot() {
     fileName: document.getElementById('fileName'),
     dirtyLabel: document.getElementById('dirtyLabel'),
     statusLeft: document.getElementById('statusLeft'),
+    diagLabel: document.getElementById('diagLabel'),
     posLabel: document.getElementById('posLabel'),
     sizeLabel: document.getElementById('sizeLabel'),
     langLabel: document.getElementById('langLabel'),

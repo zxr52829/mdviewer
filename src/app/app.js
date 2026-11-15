@@ -219,7 +219,12 @@ export class App {
     this.filePath = path;
     const languageId = languageFromPath(path);
 
-    if (this.view) this.view = null;
+    // 旧视图必须显式销毁：诊断防抖挂着一个 setTimeout，
+    // 直接置 null 会让它在 300ms 后对着已脱离文档的 DOM 跑一次。
+    if (this.view) {
+      this.view.destroy();
+      this.view = null;
+    }
     this.dom.editorRoot.innerHTML = '';
 
     this.model = new TextModel(text, { uri: path, languageId });
@@ -238,6 +243,8 @@ export class App {
 
     this.view.on('cursor', (pos) => this._onCursorMoved(pos));
     this.view.on('content', () => this._onContentChanged());
+    // 诊断结果：更新状态栏计数。挂事件而不是轮询，避免额外定时器。
+    this.view.on('diagnostics', (d) => this._renderDiagnostics(d));
 
     this.dom.fileName.textContent = opts.displayName || basename(path);
     this.dom.fileName.title = path;
@@ -249,8 +256,36 @@ export class App {
     this.view.relayout();
     this._refreshPreview(true);
     this._updateStatus();
+    // 打开文件后立即诊断一次，不等防抖：用户需要马上看到已有错误
+    this.view.runDiagnosticsNow();
     this.view.focus();
   }
+
+  /**
+   * 渲染状态栏的诊断计数。
+   *
+   * 计数用独立元素而不是复用 statusLeft：后者是瞬态消息区，
+   * 全文件 30+ 处在写「已保存 / 打开失败」，塞进去会互相覆盖。
+   * 0 个错误时整体不显示，避免噪音。
+   */
+  _renderDiagnostics(d) {
+    const el = this.dom.diagLabel;
+    if (!el) return;
+    if (!d || !d.total) {
+      el.hidden = true;
+      el.textContent = '';
+      return;
+    }
+    const parts = [];
+    if (d.errors) parts.push(`✗ ${d.errors}`);
+    if (d.warnings) parts.push(`⚠ ${d.warnings}`);
+    el.textContent = parts.join(' ');
+    el.hidden = false;
+    el.title = d.errors
+      ? `${d.errors} 个错误${d.warnings ? `，${d.warnings} 个警告` : ''} — 点击跳到下一个`
+      : `${d.warnings} 个警告 — 点击跳到下一个`;
+  }
+
 
   /**
    * 保存。
@@ -427,6 +462,10 @@ export class App {
     this._updateStatus();
     this._schedulePreview();
     this._scheduleAutoSave();
+    // 诊断也要跟上。这一条覆盖所有「不走键盘」的模型变化：
+    // setValue、格式化、压缩、撤销重做、外部替换。
+    // 视图侧的 afterEdit 只覆盖编辑热路径，两者都要有才不漏。
+    this.view?._scheduleDiagnostics?.();
   }
 
   _schedulePreview() {
@@ -515,6 +554,10 @@ export class App {
     this.dom.btnOpen?.addEventListener('click', () => this.openViaDialog());
     this.dom.btnNew?.addEventListener('click', () => this.newFile());
     this.dom.btnWorkspace?.addEventListener('click', () => this.switchWorkspace());
+    // 诊断计数点击 → 跳到下一个问题（与 VS Code 状态栏行为一致）
+    this.dom.diagLabel?.addEventListener('click', () => {
+      if (this.view?.goToNextDiagnostic()) this.view.focus();
+    });
 
     this._wireTree();
 
