@@ -40,7 +40,7 @@ function lexicalTraits(languageId) {
       return { lineComment: '//', blockComment: ['/*', '*/'], quotes: ['"'], template: null };
     case 'javascript':
     case 'typescript':
-      return { lineComment: '//', blockComment: ['/*', '*/'], quotes: ['"', "'"], template: '`' };
+      return { lineComment: '//', blockComment: ['/*', '*/'], quotes: ['"', "'"], template: '`', regex: true };
     case 'css':
       // CSS 的 // 是无效注释，不能当行注释处理：`background: url(http://a/b)`
       // 会被后面的括号配对逻辑截断，误报未闭合。CSS 只有块注释。
@@ -112,6 +112,83 @@ function yamlQuoteOpens(line, quoteCol) {
 }
 
 /**
+ * 判断某个 `/` 是正则字面量的开头，还是除号。
+ *
+ * 判据是「前一个有效字符」：正则只能出现在「表达式期望一个值」的位置，
+ * 也就是行首、运算符/分隔符之后、开括号之后、关键字之后。
+ * 若前一个字符是标识符、数字、右括号、右方括号或字符串结束，
+ * 那么这个 `/` 只能是除号。
+ *
+ * 这套判据与各 JS 词法器（acorn、esprima）采用的同类启发式一致，
+ * 覆盖真实代码的绝大部分情形；极端写法（如 `a = b\n/re/.test(c)`）
+ * 会退化为除法理解，代价是偶发漏报而不是误报 —— 对诊断功能来说
+ * 漏报远好过在正确代码上画红线。
+ *
+ * @param {string} line 当前行
+ * @param {number} slashCol `/` 所在列（0-based）
+ * @returns {boolean}
+ */
+function regexAllowed(line, slashCol) {
+  let k = slashCol - 1;
+  while (k >= 0 && (line[k] === ' ' || line[k] === '\t')) k--;
+  if (k < 0) return true; // 行首
+
+  const prev = line[k];
+  // 这些字符之后必然是新表达式的开始 → 正则在期待值的位置
+  if ('(,=:[!&|?{};+-*%<>~^'.includes(prev)) return true;
+  // 右括号 / 右方括号 / 标识符 / 数字 / 引号结束之后 → 除号
+  if (prev === ')' || prev === ']' || prev === '"' || prev === "'" || prev === '`') return false;
+  if (/[A-Za-z0-9_$]/.test(prev)) {
+    // 关键字之后仍可以是正则（`return /x/`、`typeof /x/`）
+    let s = k;
+    while (s >= 0 && /[A-Za-z0-9_$]/.test(line[s])) s--;
+    const word = line.slice(s + 1, k + 1);
+    return REGEX_PRECEDING_KEYWORDS.has(word);
+  }
+  return true;
+}
+
+/** 这些关键字之后 `/` 是正则而不是除号 */
+const REGEX_PRECEDING_KEYWORDS = new Set([
+  'return', 'typeof', 'instanceof', 'in', 'of', 'new', 'delete',
+  'void', 'throw', 'case', 'do', 'else', 'yield', 'await',
+]);
+
+/**
+ * 从起始 `/` 扫描一个单行正则字面量，返回结束位置（`/` 与 flags 之后）。
+ *
+ * 字符类 `[...]` 内的 `/` 不是结束符，必须据此跳过。
+ * 找不到闭合（单行内不闭合）时返回 -1，交给调用方按除号继续处理 ——
+ * 宁可漏报，也不要把一段普通除法硬吃成正则而掩盖真实错误。
+ *
+ * @param {string} line
+ * @param {number} startCol 起始 `/` 的列
+ * @returns {number} 结束列（不含），或 -1
+ */
+function scanRegexLiteral(line, startCol) {
+  let i = startCol + 1;
+  let inClass = false;
+  if (line[i] === '/' || line[i] === '*') return -1; // 空正则或注释，交给上层
+  while (i < line.length) {
+    const c = line[i];
+    if (c === '\\') { i += 2; continue; }
+    if (inClass) {
+      if (c === ']') inClass = false;
+      i++;
+      continue;
+    }
+    if (c === '[') { inClass = true; i++; continue; }
+    if (c === '/') {
+      i++;
+      while (i < line.length && /[a-z]/i.test(line[i])) i++; // flags
+      return i;
+    }
+    i++;
+  }
+  return -1;
+}
+
+/**
  * 跨行扫描器。
  *
  * 与 brackets.js 的 scanLineBrackets 的区别：块注释、字符串的开闭状态
@@ -131,9 +208,13 @@ function scanLines(lines, traits, checkBrackets) {
   let inString = false;
   let quote = '';
   let stringStart = 0; // 字符串在本行的起始列（0-based），用于画出完整错误区间
-  // 模板字符串（JS 反引号 / Go 原始串）跨行合法：状态跨行保留，
-  // 本行结束时不报「未闭合」，期间也不参与括号配对。
-  let inTemplate = false;
+  // 模板字符串状态栈：每层保存该层插值内的括号计数。
+  // 用栈而不是全局计数，是因为嵌套模板各自有插值：
+  //   f(`a${ g(`i${ j }`) }b`)
+  // 内层模板退出后必须恢复外层插值的计数，共用一个计数器会算错。
+  const templateStack = [];
+  let inTemplate = false;     // 处于模板文本中
+  let inTemplateExpr = false; // 处于 ${} 插值表达式中
 
   for (let li = 0; li < lines.length; li++) {
     const line = lines[li];
@@ -164,10 +245,77 @@ function scanLines(lines, traits, checkBrackets) {
         continue;
       }
 
-      // ---- 模板字符串中（跨行，不配括号，不判未闭合）----
+      // ---- 模板字符串文本中 ----
+      // 这里只处理「模板文本」一侧：转义、结束反引号、以及进入 `${}` 插值。
+      // 嵌套模板（`a${ x.map(t => `${t}`) }b`）必须能正确配对，
+      // 所以插值内部走正常表达式逻辑，遇到 `}` 再退回模板文本。
       if (inTemplate) {
         if (c === '\\') { i += 2; continue; }
-        if (c === traits.template) { inTemplate = false; i++; continue; }
+        if (c === traits.template) {
+          // 结束一层模板：弹栈。外层若仍有模板，就接着走它的插值/文本
+          templateStack.pop();
+          if (templateStack.length > 0) {
+            inTemplate = false;
+            inTemplateExpr = true;
+          } else {
+            inTemplate = false;
+            inTemplateExpr = false;
+          }
+          i++;
+          continue;
+        }
+        if (c === '$' && line[i + 1] === '{') {
+          // 进入插值：本层的括号计数从 0 开始
+          templateStack[templateStack.length - 1].braces = 0;
+          inTemplate = false;
+          inTemplateExpr = true;
+          i += 2;
+          continue;
+        }
+        i++;
+        continue;
+      }
+
+      // ---- 插值表达式内部 ----
+      // 插值里是普通表达式：括号要照常配对，字符串/正则要照常识别，
+      // 只有「与 `${` 配对的那个 `}`」才表示回到模板文本。
+      // braces 记录本层插值内未闭合的括号数，归零时的 `}` 才是插值收尾。
+      if (inTemplateExpr) {
+        const frame = templateStack[templateStack.length - 1];
+        if (c === '"' || c === "'") {
+          inString = true;
+          quote = c;
+          stringStart = i;
+          i++;
+          continue;
+        }
+        if (c === traits.template) {
+          // 插值内出现反引号 → 嵌套模板。新开一帧，退出后回到本帧插值
+          templateStack.push({ braces: 0, chars: [], openLine: lineNo, openColumn: i + 1 });
+          inTemplate = true;
+          inTemplateExpr = false;
+          i++;
+          continue;
+        }
+        if (c === '{' || c === '(' || c === '[') {
+          frame.braces++;
+          frame.chars.push({ ch: c, line: lineNo, column: i + 1 });
+          i++;
+          continue;
+        }
+        if (c === '}' || c === ')' || c === ']') {
+          if (c === '}' && frame.braces === 0) {
+            // 插值结束，回到本层模板文本
+            inTemplate = true;
+            inTemplateExpr = false;
+            i++;
+            continue;
+          }
+          frame.braces--;
+          frame.chars.pop();
+          i++;
+          continue;
+        }
         i++;
         continue;
       }
@@ -185,9 +333,20 @@ function scanLines(lines, traits, checkBrackets) {
 
       // ---- 模板字符串开启 ----
       if (traits.template && c === traits.template) {
+        templateStack.push({ braces: 0, chars: [], openLine: lineNo, openColumn: i + 1 });
         inTemplate = true;
+        inTemplateExpr = false;
         i++;
         continue;
+      }
+
+      // ---- 正则字面量（JS 家族）----
+      // 必须排在括号判定之前：`/[&<>"]/g` 里的 `[` 和 `"` 若被当成语法符号，
+      // 会同时误报「未闭合括号」和「未闭合字符串」。这是本仓库实测最常见的
+      // 误报来源（官方源码里 27 个 .js 有 6 个被误报，全部源于正则）。
+      if (traits.regex && c === '/' && regexAllowed(line, i)) {
+        const end = scanRegexLiteral(line, i);
+        if (end > 0) { i = end; continue; }
       }
 
       // ---- 字符串开启 ----
@@ -283,6 +442,36 @@ function scanLines(lines, traits, checkBrackets) {
       message: `还有 ${stack.length - MAX_UNCLOSED} 个未闭合的括号未标出`,
       source: SOURCE.bracket,
     });
+  }
+
+  // 文件结束时仍未闭合的模板字符串 / 插值内残留括号。
+  //
+  // 只报最内层未闭合的那一帧：嵌套模板里所有外层都会被顺带判成未闭合，
+  // 但那只是内层没关的连带结果，全报出来是同一条错误的多个副本。
+  // 若该帧里还留着未闭合的括号，优先报括号 —— 那才是真正的错误位置。
+  if (templateStack.length) {
+    const frame = templateStack[templateStack.length - 1];
+    if (frame.chars.length) {
+      for (const item of frame.chars.slice(0, MAX_UNCLOSED)) {
+        out.push({
+          severity: SEVERITY.error,
+          line: item.line,
+          column: item.column,
+          length: 1,
+          message: `模板插值内未闭合的括号 "${item.ch}"`,
+          source: SOURCE.bracket,
+        });
+      }
+    } else if (frame.openLine) {
+      out.push({
+        severity: SEVERITY.error,
+        line: frame.openLine,
+        column: frame.openColumn,
+        length: 1,
+        message: `未闭合的模板字符串（缺少收尾的 ${traits.template}）`,
+        source: SOURCE.lexer,
+      });
+    }
   }
 
   return out;

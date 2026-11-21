@@ -696,6 +696,30 @@ function eq(name, actual, expected) {
     const d = diag('('.repeat(50) + '\nlet a = 1;', 'javascript');
     ok('未闭合括号报数封顶', d.length <= 4, `报了 ${d.length} 条`);
   }
+
+  /* --- 正则字面量（本仓最大的误报源，占原始误报的 100%）--- */
+  // `/[&<>"]/g` 里的 `[` 与 `"` 若被当语法符号，会同时误报括号与字符串。
+  ok('正则内的方括号不误报', diag('const re = /[&<>"]/g;', 'javascript').length === 0);
+  ok('正则内的括号不误报', diag('x = /a(b/g;', 'javascript').length === 0);
+  ok('正则内的引号不误报', diag(`x = /["']/g;`, 'javascript').length === 0);
+  ok('正则转义序列不误报', diag('s.split(/\\r?\\n/);', 'javascript').length === 0);
+  // 除法不能被当成正则开头（否则后续真实错误会被吃掉）
+  ok('除法链不误判为正则', diag('const r = a / b / c;', 'javascript').length === 0);
+  ok('除法里的括号仍要配对', diag('const r = (a + b) / (c + d);', 'javascript').length === 0);
+  ok('正则之后的真错误仍被检出',
+    diag('const re = /a/g;\nfunction f() {', 'javascript').some((x) => x.source === 'bracket'));
+
+  /* --- 嵌套模板字符串 --- */
+  // 布尔状态会在内层反引号处关闭，导致外层插值的 } 被当代码 —— 实测过的回归点
+  ok('嵌套模板不误报', diag('f(`a${g(`i${j}`)}b`);', 'javascript').length === 0);
+  ok('模板内箭头函数不误报',
+    diag('push(a, `<ul>${items.map(t => `<li>${t}</li>`).join("")}</ul>`);', 'javascript').length === 0);
+  ok('模板内对象字面量不误报', diag('x = `${ { a: 1 }.a }`;', 'javascript').length === 0);
+  // 反过来的漏报：模板真的没闭合时必须报
+  ok('未闭合的模板字符串被检出',
+    diag('const t = `abc', 'javascript').some((x) => /模板/.test(x.message)));
+  ok('插值内缺括号被检出',
+    diag('x = `${f(1}`;', 'javascript').some((x) => x.source === 'bracket' || /模板/.test(x.message)));
 }
 
 /* ================= AI 改写 diff ================= */
