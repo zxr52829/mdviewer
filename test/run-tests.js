@@ -15,6 +15,8 @@ import {
   groupByLine as groupDiagnosticsByLine,
 } from '../src/lang/diagnostics.js';
 import { diffLines, diffStats, onlyTrailingBlankChange } from '../src/app/line-diff.js';
+import { readdirSync, readFileSync } from 'node:fs';
+import { join as joinPath, extname } from 'node:path';
 
 let passed = 0;
 let failed = 0;
@@ -767,6 +769,75 @@ function eq(name, actual, expected) {
     ok('删除纯空白行也不算仅空行差', onlyTrailingBlankChange(r4) === false || r4.length === 2);
     ok('无差异不算仅空行差', !onlyTrailingBlankChange(rows(['a'], ['a'])));
   }
+}
+
+/* ================= 自扫：仓库源码不得产生诊断 ================= */
+
+/**
+ * 把仓库自己的源码全部过一遍诊断，断言零误报。
+ *
+ * 为什么需要这条：前面所有诊断用例都是我手写的片段。手写片段只能覆盖
+ * 「我想到了的语法」，想不到的结构永远测不到 —— 正则字面量与嵌套模板
+ * 这两个缺陷就是这样漏过去的：单测全绿，但拿真实文件一跑，27 个 .js
+ * 里 6 个被误报，46 条。这条测试把「真实代码」变成断言对象。
+ *
+ * 代价要讲清楚：它与本仓库的内容耦合。往里加一个语法正确、但用到了
+ * 尚未支持结构的文件，这条会失败 —— 那正是它的用途，逼着诊断器跟进，
+ * 而不是靠手写用例自我安慰。因此排除目录要显式列出，不能让它变成
+ * 「扫不到东西所以永远绿」。
+ */
+{
+  const HERE = new URL('.', import.meta.url).pathname.replace(/^\/([A-Za-z]:)/, '$1');
+  const ROOT = joinPath(HERE, '..');
+
+  // 只扫源文件；排除构建产物与依赖。
+  // 注意 desktop/ 不能排除：Go 侧 ai.go 的提示词与围栏逻辑就在那里，
+  // 而 Go 是有完整诊断能力的（lexicalTraits 有 go 分支）。
+  const SKIP_DIRS = new Set(['.git', 'node_modules', 'web', 'winres', '.sync']);
+  // 只保留诊断器真正走到词法扫描的扩展名。
+  // .md 与 .html 在 lexicalTraits 里没有可扫描的引号/括号语法，
+  // collectDiagnostics 对它们恒返回空，纳入进来只是空跑。
+  const SCAN_EXT = new Set(['.js', '.mjs', '.json', '.css', '.go']);
+
+  const files = [];
+  (function walk(dir) {
+    let entries;
+    try { entries = readdirSync(dir, { withFileTypes: true }); } catch { return; }
+    for (const entry of entries) {
+      if (entry.name.startsWith('.') && entry.name !== '.') continue;
+      const full = joinPath(dir, entry.name);
+      if (entry.isDirectory()) {
+        if (!SKIP_DIRS.has(entry.name)) walk(full);
+      } else if (entry.isFile() && SCAN_EXT.has(extname(entry.name))) {
+        files.push(full);
+      }
+    }
+  })(ROOT);
+
+  // 扫不到文件说明路径算错了，必须报错而不是静默通过
+  ok('自扫：找到待检查的源文件', files.length >= 20, `只找到 ${files.length} 个`);
+
+  const dirty = [];
+  for (const f of files) {
+    const rel = f.substring(ROOT.length + 1).replace(/\\/g, '/');
+    const lang = languageFromPath(rel);
+    // plaintext 与 markdown 没有诊断能力，跳过
+    if (lang === 'plaintext') continue;
+    let text;
+    try { text = readFileSync(f, 'utf8'); } catch { continue; }
+    let list;
+    try { list = collectDiagnostics(text, lang); } catch (err) {
+      dirty.push(`${rel} 抛出异常：${err.message}`);
+      continue;
+    }
+    if (list.length) {
+      const first = list[0];
+      dirty.push(`${rel}（${lang}）${list.length} 条，首条 ${first.severity}@${first.line}:${first.column} ${first.message}`);
+    }
+  }
+
+  ok('自扫：仓库源码零误报', dirty.length === 0,
+    dirty.length ? `\n    ${dirty.join('\n    ')}` : '');
 }
 
 /* ================= 汇总 ================= */
