@@ -15,6 +15,7 @@ import {
   groupByLine as groupDiagnosticsByLine,
 } from '../src/lang/diagnostics.js';
 import { diffLines, diffStats, onlyTrailingBlankChange } from '../src/app/line-diff.js';
+import { extractSymbols, buildIndex, queryIndex, isIgnoredPath } from '../src/lang/workspace-index.js';
 import { readdirSync, readFileSync } from 'node:fs';
 import { join as joinPath, extname } from 'node:path';
 
@@ -838,6 +839,175 @@ function eq(name, actual, expected) {
 
   ok('自扫：仓库源码零误报', dirty.length === 0,
     dirty.length ? `\n    ${dirty.join('\n    ')}` : '');
+}
+
+/* ================= 工作区符号索引 ================= */
+
+{
+  const sym = (text, lang = 'javascript') => extractSymbols(text, lang).map((s) => s.name);
+
+  // --- 抽取 ---
+  {
+    const names = sym('export function alpha() {}\nexport const beta = 1;\nclass Gamma {}\n');
+    ok('抽取导出函数', names.includes('alpha'));
+    ok('抽取导出常量', names.includes('beta'));
+    ok('抽取类', names.includes('Gamma'));
+  }
+  ok('箭头函数赋值算函数', sym('const fnA = (x) => x;').includes('fnA'));
+  ok('普通函数声明被抽取', sym('function plainFn() {}').includes('plainFn'));
+
+  // --- 作用域过滤：局部变量不该进索引 ---
+  {
+    const names = sym('function outer() {\n  const localVar = 1;\n  return localVar;\n}\n');
+    ok('函数内局部变量不进索引', !names.includes('localVar'), names.join(','));
+    ok('顶层函数本身仍在', names.includes('outer'));
+  }
+  // 函数内的常量同样不进索引：跨文件补全用的是别人的导出面，
+  // 不是别人函数里的临时变量。实测放开这条会让 Go 文件从 13 个
+  // 有用符号涨回 35 个局部名。
+  ok('函数内的大写常量也不进索引',
+    !sym('function f() {\n  const MAX_RETRY = 3;\n}').includes('MAX_RETRY'));
+  ok('顶层大写常量保留', sym('const MAX_RETRY = 3;').includes('MAX_RETRY'));
+  ok('单字符名字被丢弃', !sym('const a = 1;').includes('a'));
+
+  // tab 缩进必须同样被识别为局部。Go 用 gofmt 强制 tab，
+  // 只认空格会把整个 Go 文件判成「全部顶层」—— 实测 ai.go 那 35 个
+  // 符号就是这么来的，修好后降到 13 个真正的顶层声明。
+  {
+    const goSrc = [
+      'package main',
+      '',
+      'func topLevel() {',
+      '\tvar localVar = 1',
+      '\t_ = localVar',
+      '}',
+    ].join('\n');
+    const names = extractSymbols(goSrc, 'go').map((s) => s.name);
+    ok('tab 缩进的局部变量不进索引', !names.includes('localVar'), names.join(','));
+    ok('tab 缩进下的顶层函数保留', names.includes('topLevel'));
+  }
+
+  // --- CSS 选择器只在 CSS 文件里启用 ---
+  ok('CSS 抽取类选择器', extractSymbols('.panel { }', 'css').some((s) => s.name === 'panel'));
+  // 关键回归：`http.ResponseWriter` 的 `.ResponseWriter` 曾被误当成选择器
+  ok('JS 里的成员访问不算选择器',
+    !extractSymbols('w http.ResponseWriter', 'javascript').some((s) => s.name === 'ResponseWriter'));
+  ok('Go 里的成员访问不算选择器',
+    !extractSymbols('\tw http.ResponseWriter', 'go').some((s) => s.name === 'ResponseWriter'));
+
+  ok('Markdown 不抽取', extractSymbols('# 标题\nconst x = 1;', 'markdown').length === 0);
+  ok('plaintext 不抽取', extractSymbols('const x = 1;', 'plaintext').length === 0);
+
+  // --- 建索引与查询 ---
+  const files = [
+    { path: 'src/a.js', text: 'export function sharedName() {}', language: 'javascript' },
+    { path: 'src/b.js', text: 'export function otherName() {}\nconst sharedName2 = 1;', language: 'javascript' },
+    { path: 'styles.css', text: '.panel {}\n.panel-body {}', language: 'css' },
+  ];
+  const idx = buildIndex(files);
+
+  ok('索引收录全部文件', idx.files.size === 3);
+  ok('按前缀查得到', queryIndex(idx, 'shared').some((i) => i.label === 'sharedName'));
+  ok('无前缀返回候选', queryIndex(idx, '').length > 0);
+  ok('查不到时返回空', queryIndex(idx, 'zzzNothing').length === 0);
+
+  {
+    // 排除当前文件：定义在本文件里的名字由当前文档词频补全负责，不重复列
+    const r = queryIndex(idx, 'sharedName', { excludePath: 'src/a.js' });
+    ok('排除当前文件后不再返回它定义的名字', !r.some((i) => i.label === 'sharedName'));
+  }
+  {
+    // 同分时短名字优先：查 panel 时 panel 要排在 panel-body 之前
+    const r = queryIndex(idx, 'panel', { excludePath: 'src/a.js' });
+    ok('同分时短名字靠前', r[0] && r[0].label === 'panel', JSON.stringify(r.map((x) => x.label)));
+  }
+  ok('limit 生效', queryIndex(idx, '', { limit: 1 }).length <= 1);
+
+  // --- 上限与截断 ---
+  {
+    const many = Array.from({ length: 10 }, (_, i) => ({
+      path: `f${i}.js`, text: `export function fn${i}() {}`, language: 'javascript',
+    }));
+    const small = buildIndex(many, { maxFiles: 3 });
+    ok('maxFiles 生效', small.files.size === 3);
+    ok('超限时标记截断', small.truncated === true);
+  }
+  {
+    const big = buildIndex([{ path: 'huge.js', text: 'x'.repeat(100), language: 'javascript' }],
+      { maxBytesPerFile: 10 });
+    ok('超大文件被跳过并标记截断', big.files.size === 0 && big.truncated === true);
+  }
+  ok('空输入不炸', buildIndex([]).files.size === 0);
+  ok('bad 查询不炸', queryIndex(null, 'x').length === 0);
+
+  // --- 忽略路径 ---
+  // desktop/web/ 是 go:embed 的拷贝目录，扫进去同一符号会出现两次，
+  // 来源计数「+1」也会变成假的。这是实测发现的（indexFiles 79 而非 40）。
+  ok('忽略 desktop/web 构建产物', isIgnoredPath('desktop/web/src/app/api.js'));
+  ok('忽略 node_modules', isIgnoredPath('node_modules/x/index.js'));
+  ok('忽略 .git', isIgnoredPath('.git/config'));
+  // 按路径段判断，不是子串：同名文件不该被误杀
+  ok('不误杀名字含 web 的源文件', !isIgnoredPath('src/web-utils.js'));
+  ok('不误杀根目录文件', !isIgnoredPath('index.html'));
+  // 测试文件里的 ok()/eq() 这类断言辅助函数实测会占满补全候选前几位
+  ok('忽略 *.test.js', isIgnoredPath('src/foo.test.js'));
+  ok('忽略 *.spec.ts', isIgnoredPath('src/bar.spec.ts'));
+  ok('忽略 run-tests.js', isIgnoredPath('test/run-tests.js'));
+  ok('不误杀名字含 test 的普通源码', !isIgnoredPath('src/latest.js'));
+  {
+    const withIgnored = buildIndex([
+      { path: 'a.js', text: 'export function dupName() {}', language: 'javascript' },
+      { path: 'desktop/web/a.js', text: 'export function dupName() {}', language: 'javascript' },
+    ]);
+    ok('构建产物目录不进索引', withIgnored.files.size === 1, `实际 ${withIgnored.files.size}`);
+    const sites = withIgnored.byName.get('dupName') || [];
+    ok('同名不产生重复来源', sites.length === 1, JSON.stringify(sites));
+  }
+
+  // --- 按当前语言过滤来源 ---
+  // styles.css 实测贡献 165 个选择器，占全部符号四成；
+  // 在 .js 里补全时它们只会把有用的名字挤出可见区域。
+  {
+    const mixed = buildIndex([
+      { path: 'a.js', text: 'export function handlex() {}', language: 'javascript' },
+      { path: 's.css', text: '.handlex-panel { }\n.handlex { }', language: 'css' },
+    ]);
+    // CSS 选择器在 JS 里不该出现
+    const inJs = queryIndex(mixed, 'handlex', { language: 'javascript' });
+    ok('JS 里不列出 CSS 选择器', inJs.every((i) => !/\.css/.test(i.detail)),
+      JSON.stringify(inJs.map((x) => x.detail)));
+    // 在 CSS 里则应当出现
+    const inCss = queryIndex(mixed, 'handlex', { language: 'css' });
+    ok('CSS 里列出选择器', inCss.some((i) => /\.css/.test(i.detail)));
+    // 不传 language（未知语言）时保守保留全部
+    const noLang = queryIndex(mixed, 'handlex', {});
+    ok('不指定语言时保留全部来源', noLang.length >= 2, JSON.stringify(noLang.map((x) => x.detail)));
+  }
+  // 同名多来源时优先同语言
+  {
+    const both = buildIndex([
+      { path: 'a.js', text: 'export function sameName() {}', language: 'javascript' },
+      { path: 'b.py', text: 'def sameName():\n    pass', language: 'python' },
+    ]);
+    const r = queryIndex(both, 'sameName', { language: 'python' });
+    ok('同名多来源时优先同语言', r.length && /\.py/.test(r[0].detail), JSON.stringify(r));
+  }
+
+  // --- 注释里的示例代码不得进索引 ---
+  // 实测：workspace-index.js 自己的注释写了「const err = ...」，
+  // 结果 err 被当成真实声明进了候选。
+  {
+    const names = sym('// 示例：const ghostVar = 1;\n/* const blockGhost = 2; */\nexport const realOne = 3;');
+    ok('行注释里的声明不进索引', !names.includes('ghostVar'), names.join(','));
+    ok('块注释里的声明不进索引', !names.includes('blockGhost'), names.join(','));
+    ok('注释外的真实声明仍在', names.includes('realOne'));
+  }
+  // 剥离注释后行号不能错位
+  {
+    const text = '// 注释\n/* 多行\n注释 */\nexport function afterComments() {}';
+    const s = extractSymbols(text, 'javascript').find((x) => x.name === 'afterComments');
+    ok('剥注释后行号仍准确', s && s.line === 4, JSON.stringify(s));
+  }
 }
 
 /* ================= 汇总 ================= */

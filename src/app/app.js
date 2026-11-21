@@ -15,6 +15,7 @@ import { morphHtml } from '../preview/morph.js';
 import * as jsonService from '../lang/json-service.js';
 import { languageFromPath, basename, PREVIEWABLE, VALIDATABLE, LANGUAGE_LABELS } from '../lang/registry.js';
 import { readFile, saveFile, listDir, pickFile, pickDirectory, setRoot, createFile, detectBackend, backendMode, backendRoot } from './api.js';
+import { buildIndex, queryIndex, isIgnoredPath } from '../lang/workspace-index.js';
 import { loadSettings, saveSettings, applySettings, defaultSettings, FONT_STACKS } from './settings.js';
 import { SettingsPanel } from './settings-panel.js';
 import { AiRewritePanel } from './ai-panel.js';
@@ -310,6 +311,14 @@ export class App {
     // 查找高亮开关：关掉时不扫描全文
     this.view.setFindHighlightEnabled(this.setting('editor.findHighlight') !== false);
 
+    // 跨文件补全：视图只拿到一个纯函数，索引本身在 App 这一层维护。
+    // 关掉设置时传 null，视图就退回只看当前文档的原有行为。
+    if (this.setting('ai.workspaceIndex')) {
+      this.view.setCompletionSource((prefix) => this._queryWorkspaceIndex(prefix));
+    } else {
+      this.view.setCompletionSource(null);
+    }
+
     this.view.on('cursor', (pos) => this._onCursorMoved(pos));
     this.view.on('content', () => this._onContentChanged());
     // 诊断结果：更新状态栏计数。挂事件而不是轮询，避免额外定时器。
@@ -370,6 +379,8 @@ export class App {
     try {
       const res = await saveFile(this.filePath, content);
       this.model.markSaved();
+      // 文件内容变了，索引里它的符号可能已经不同；下次补全时重建
+      this._invalidateWorkspaceIndex();
       this._updateStatus();
       if (res.mode === 'exe') {
         this.dom.statusLeft.textContent = `已保存 ${basename(this.filePath)}`;
@@ -523,6 +534,116 @@ export class App {
         <div class="outline-head">JSON 有效 · ${out.length} 个顶层节点</div>
         ${out.map((n) => renderNode(n, 0)).join('')}
       </div>`;
+  }
+
+  /* ---------------- 工作区符号索引 ---------------- */
+
+  /**
+   * 从索引取跨文件补全候选。
+   *
+   * 索引是懒建的（第一次真的要补全时才扫描工作区），之后按工作区根做缓存；
+   * 保存文件会让对应条目失效，下次重建。
+   *
+   * @param {string} prefix 光标处前缀
+   * @returns {Array} 候选项；索引未就绪时返回空数组，不阻塞补全
+   */
+  _queryWorkspaceIndex(prefix) {
+    if (!this._wsIndex) {
+      // 首次使用：异步建索引，本次补全先用现有候选顶上，建完后生效
+      this._ensureWorkspaceIndex();
+      return [];
+    }
+    if (this._wsIndexTruncated && !this._wsIndexWarned) {
+      this._wsIndexWarned = true;
+      this.dom.statusLeft.textContent = '工作区文件过多，跨文件补全只索引了前一部分';
+    }
+    return queryIndex(this._wsIndex, prefix, {
+      excludePath: this.filePath || '',
+      // 传入当前文件语言：避免在 .js 里列出 165 个 CSS 选择器
+      language: this.model ? this.model.languageId : null,
+      limit: 15,
+    });
+  }
+
+  /**
+   * 建立工作区索引。
+   *
+   * 只做只读扫描：递归 listDir 拿到路径，再逐个 readFile 抽符号。
+   * 已打开的文件优先用内存里的内容（可能还没保存），避免索引落后于编辑。
+   */
+  async _ensureWorkspaceIndex() {
+    if (this._wsIndexBuilding) return this._wsIndexBuilding;
+    if (backendMode() !== 'exe') return null;
+
+    this._wsIndexBuilding = (async () => {
+      try {
+        const paths = await this._collectWorkspacePaths();
+        if (!paths.length) return null;
+
+        const openPath = this.filePath;
+        const files = [];
+        // 并发受限：一次全发会把主进程的读盘压满，尤其在网络盘上
+        const CONCURRENCY = 8;
+        for (let i = 0; i < paths.length; i += CONCURRENCY) {
+          const batch = paths.slice(i, i + CONCURRENCY);
+          const got = await Promise.all(batch.map(async (p) => {
+            // 当前文件用内存内容，保证索引与编辑器一致
+            if (openPath && p === openPath && this.model) {
+              return { path: p, text: this.model.getValue(), language: this.model.languageId };
+            }
+            try {
+              const f = await readFile(p);
+              return { path: p, text: f.content, language: languageFromPath(p) };
+            } catch {
+              return null; // 读不了就跳过，单个文件失败不该毁掉整个索引
+            }
+          }));
+          for (const g of got) if (g) files.push(g);
+        }
+
+        const idx = buildIndex(files);
+        this._wsIndex = idx;
+        this._wsIndexTruncated = idx.truncated;
+        this._wsIndexWarned = false;
+        return idx;
+      } catch {
+        return null;
+      } finally {
+        this._wsIndexBuilding = null;
+      }
+    })();
+    return this._wsIndexBuilding;
+  }
+
+  /** 递归列出工作区里所有可打开文件的相对路径 */
+  async _collectWorkspacePaths(dir = '.', acc = [], depth = 0) {
+    // 深度上限防止误开一个大目录（比如整个 C 盘）时扫到天荒地老
+    if (depth > 8 || acc.length > 2000) return acc;
+    let entries;
+    try {
+      ({ entries } = await listDir(dir));
+    } catch {
+      return acc;
+    }
+    const subs = [];
+    for (const e of entries) {
+      if (e.isDir) {
+        subs.push(e.path);
+      } else if (!isIgnoredPath(e.path)) {
+        acc.push(e.path);
+      }
+    }
+    for (const s of subs) {
+      if (acc.length > 2000) break;
+      await this._collectWorkspacePaths(s, acc, depth + 1);
+    }
+    return acc;
+  }
+
+  /** 使索引失效（保存、切换工作区后调用） */
+  _invalidateWorkspaceIndex() {
+    this._wsIndex = null;
+    this._wsIndexBuilding = null;
   }
 
   /* ---------------- 预览 ---------------- */
@@ -704,6 +825,8 @@ export class App {
       const info = await setRoot(picked.path);
       const newRoot = info.root;
       this._updateRootDisplay(newRoot);
+      // 换了工作区，旧索引里的路径全部失效
+      this._invalidateWorkspaceIndex();
       await this.loadTree('.');
 
       // 目标目录没有可编辑文件时要说清楚，否则用户只看到一片空白，

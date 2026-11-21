@@ -190,6 +190,14 @@ export const SETTINGS_SCHEMA = [
         apply: 'self',
         hint: '超过这个体积拒绝改写：既超出模型有效上下文，也通常是误选',
       },
+      {
+        id: 'ai.workspaceIndex',
+        label: '跨文件补全',
+        type: 'boolean',
+        default: true,
+        apply: 'self',
+        hint: '补全时把工作区其他文件里的函数、类、导出名也纳入候选。只建名字索引，不做类型推断',
+      },
     ],
   },
 ];

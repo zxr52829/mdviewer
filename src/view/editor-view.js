@@ -168,6 +168,19 @@ export class EditorView {
 
   /* ---------------- 补全 ---------------- */
 
+  /**
+   * 设置跨文件候选来源。
+   *
+   * 视图不该知道工作区、文件系统或索引的存在，所以这里只留一个纯函数钩子：
+   * 给定前缀，返回额外的候选项。由 app.js 接到工作区索引上。
+   * 不设置时行为与原来完全一致（只有当前文档 + 语言符号库）。
+   *
+   * @param {((prefix:string) => Array) | null} fn
+   */
+  setCompletionSource(fn) {
+    this._extraCompletionSource = fn || null;
+  }
+
   /** 触发补全（由输入或快捷键调用） */
   triggerSuggest() {
     if (this._suggestEnabled === false) return;
@@ -180,10 +193,26 @@ export class EditorView {
       languageId: this.model.languageId,
     });
 
+    let items = res.items;
+    // 跨文件候选排在同分候选之后：当前文档里的名字才是首选，
+    // 工作区索引用来补「记不清在哪个文件里定义过」的那一类。
+    if (this._extraCompletionSource) {
+      let extra = [];
+      try {
+        extra = this._extraCompletionSource(res.prefix) || [];
+      } catch {
+        extra = []; // 索引出问题不该连带让补全崩掉
+      }
+      if (extra.length) {
+        const have = new Set(items.map((i) => i.label));
+        items = items.concat(extra.filter((e) => e && e.label && !have.has(e.label)));
+      }
+    }
+
     this._suggestFrom = res.from;
     this._suggestPrefix = res.prefix;
 
-    if (!res.items.length) {
+    if (!items.length) {
       this.suggest.hide();
       return;
     }
@@ -197,7 +226,7 @@ export class EditorView {
     const x = contentRect.left - rootRect.left + left;
     const y = contentRect.top - rootRect.top + top - scrollTop;
 
-    this.suggest.show(res.items, res.prefix, {
+    this.suggest.show(items, res.prefix, {
       left: x,
       top: y,
       lineHeight: this._lh,
